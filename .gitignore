@@ -1,0 +1,6 @@
+.DS_Store
+generation/
+data/projects.json
+data/projects/
+data/media/
+data/storyboard.json

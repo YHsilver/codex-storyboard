@@ -1,0 +1,10 @@
+{
+  "name": "codex-storyboard",
+  "private": true,
+  "version": "0.3.1",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js"
+  }
+}

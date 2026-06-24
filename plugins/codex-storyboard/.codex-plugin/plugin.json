@@ -1,0 +1,37 @@
+{
+  "name": "codex-storyboard",
+  "version": "0.4.0",
+  "description": "Create and manage storyboard projects, process image and video generation tasks, and return assets to the local Codex storyboard.",
+  "author": {
+    "name": "Yuuhann"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Storyboard",
+    "shortDescription": "Create storyboards and generate their image and video assets.",
+    "longDescription": "Codex Storyboard lets Codex create, find, update, and delete complete local storyboard projects without browser automation. It also reads pending shots, honors project aspect ratios and DESIGN.md, routes assets to Image Generation, HyperFrames, or Remotion, and returns outputs to the correct project and row.",
+    "developerName": "Yuuhann",
+    "category": "Productivity",
+    "brandColor": "#0AA6BD",
+    "capabilities": [
+      "Storyboard task queue",
+      "Create complete storyboard projects",
+      "Project search and CRUD",
+      "Multi-project asset routing",
+      "Project aspect-ratio support",
+      "Project DESIGN.md visual guidance",
+      "Image generation routing",
+      "HyperFrames video routing",
+      "Remotion video routing",
+      "Automatic local asset return"
+    ],
+    "defaultPrompt": [
+      "Create a complete storyboard project from my video idea and write it into Codex Storyboard.",
+      "Find and update my local storyboard project.",
+      "Process all pending Codex storyboard generation tasks.",
+      "Generate the pending storyboard image assets and return them to the storyboard.",
+      "Generate the pending HyperFrames or Remotion shots and return the rendered videos."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

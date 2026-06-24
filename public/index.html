@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Codex 分镜台</title>
+  <script>
+    try {
+      const theme = localStorage.getItem("codex-storyboard-theme");
+      document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+    } catch {
+      document.documentElement.dataset.theme = "light";
+    }
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button id="brand-home" class="brand" type="button" aria-label="返回项目首页">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="presentation">
+          <path d="M4 9.5h16v10H4z" />
+          <path d="M4 9.5 6.2 4h16L20 9.5z" />
+          <path d="m7 4 2 5.5M13 4l2 5.5M19 4l2 5.5M9 14h6M9 17h4" />
+        </svg>
+      </span>
+      <strong>Codex 分镜台</strong>
+    </button>
+
+    <div id="home-actions" class="header-actions">
+      <button class="theme-toggle" data-theme-toggle type="button" aria-label="切换到深色主题">
+        <span class="theme-icon" aria-hidden="true"></span>
+      </button>
+      <button id="create-project" class="primary">＋ 新建项目</button>
+    </div>
+
+    <div id="storyboard-actions" class="storyboard-header" hidden>
+      <div class="project-heading">
+        <button id="back-home" class="back-button" type="button">← 项目首页</button>
+        <span class="header-divider"></span>
+        <strong id="project-title"></strong>
+        <span id="project-ratio" class="ratio-badge"></span>
+      </div>
+      <div class="summary">
+        <span id="save-status" aria-live="polite">已保存</span>
+        <span class="summary-label">总时长</span>
+        <strong id="duration-total">0:00</strong>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="切换到深色主题">
+          <span class="theme-icon" aria-hidden="true"></span>
+        </button>
+        <div id="design-menu" class="design-menu">
+          <button
+            id="design-menu-trigger"
+            class="design-menu-trigger"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            <span class="design-dot" aria-hidden="true"></span>
+            <span>视觉规范</span>
+            <span class="design-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="design-menu-popover" class="design-menu-popover" role="menu" hidden>
+            <div class="design-menu-heading">
+              <strong id="design-status">无视觉规范</strong>
+              <span id="design-description">生成素材时不应用统一视觉规范</span>
+            </div>
+            <button id="view-design" class="design-menu-item" type="button" role="menuitem" hidden>
+              查看 DESIGN.md
+            </button>
+            <button id="import-design" class="design-menu-item" type="button" role="menuitem">
+              导入 DESIGN.md
+            </button>
+            <button
+              id="remove-design"
+              class="design-menu-item danger"
+              type="button"
+              role="menuitem"
+              hidden
+            >
+              移除视觉规范
+            </button>
+          </div>
+        </div>
+        <button id="generate-all" class="secondary">批量生成</button>
+        <button id="add-shot-top" class="primary">＋ 新增镜头</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="projects-view" class="projects-view">
+    <section class="projects-intro">
+      <div>
+        <h1>视频分镜项目</h1>
+        <p>脚本、素材和生成任务都保存在本机。</p>
+      </div>
+      <span id="project-count" class="project-count"></span>
+    </section>
+    <section id="projects-grid" class="projects-grid"></section>
+  </main>
+
+  <main id="storyboard-view" class="storyboard-view" hidden>
+    <section class="table-shell">
+      <table>
+        <colgroup>
+          <col class="col-index" />
+          <col class="col-roll" />
+          <col class="col-media" />
+          <col class="col-duration" />
+          <col class="col-dialogue" />
+          <col class="col-visual" />
+          <col class="col-generator" />
+          <col class="col-preview" />
+          <col class="col-notes" />
+          <col class="col-actions" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>镜头</th>
+            <th>媒体</th>
+            <th>时长</th>
+            <th>台词文案</th>
+            <th>画面描述 / 生成提示词</th>
+            <th>生成方式</th>
+            <th>素材预览</th>
+            <th>备注</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="shots-body"></tbody>
+      </table>
+    </section>
+    <button id="add-shot-bottom" class="add-row">＋ 添加一个镜头</button>
+  </main>
+
+  <template id="project-card-template">
+    <article class="project-card">
+      <button class="project-open" type="button">
+        <div class="project-cover">
+          <img alt="" />
+          <div class="project-placeholder">
+            <strong></strong>
+            <span>暂无素材</span>
+          </div>
+        </div>
+        <div class="project-card-body">
+          <strong class="project-card-title"></strong>
+          <span class="project-meta"></span>
+        </div>
+      </button>
+      <div class="project-card-actions">
+        <button class="card-action rename-project" type="button">重命名</button>
+        <button class="card-action danger delete-project" type="button">删除</button>
+      </div>
+    </article>
+  </template>
+
+  <template id="shot-row-template">
+    <tr class="shot-row">
+      <td class="index-cell"></td>
+      <td><div data-select-field="rollType"></div></td>
+      <td><div data-select-field="mediaType"></div></td>
+      <td>
+        <div class="duration-input">
+          <input data-field="duration" type="number" min="0" step="0.5" />
+          <span>秒</span>
+        </div>
+      </td>
+      <td><textarea data-field="dialogue" placeholder="输入这一镜的台词"></textarea></td>
+      <td><textarea data-field="visualPrompt" placeholder="描述画面，也作为生成提示词"></textarea></td>
+      <td><div data-select-field="generator"></div></td>
+      <td class="preview-cell">
+        <div class="preview-stack">
+          <div class="preview-slot"></div>
+          <div class="generation-controls">
+            <span class="generation-status"></span>
+            <button class="generate-shot" type="button">生成素材</button>
+          </div>
+        </div>
+      </td>
+      <td><textarea data-field="notes" placeholder="补充说明"></textarea></td>
+      <td><button class="delete-shot" type="button" aria-label="删除镜头">×</button></td>
+    </tr>
+  </template>
+
+  <dialog id="project-dialog" class="form-dialog">
+    <form id="project-form" method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">项目设置</p>
+          <h2 id="project-dialog-title">新建项目</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <label class="form-field">
+        <span>项目名称</span>
+        <input id="project-name-input" maxlength="60" required autocomplete="off" />
+      </label>
+      <fieldset id="ratio-options" class="ratio-options">
+        <legend>画面比例</legend>
+      </fieldset>
+      <section id="project-design-option" class="design-import">
+        <div>
+          <strong>视觉规范（可选）</strong>
+          <span id="project-design-file-name">未选择 DESIGN.md</span>
+        </div>
+        <button id="choose-project-design" class="secondary compact-button" type="button">
+          选择文件
+        </button>
+      </section>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>取消</button>
+        <button id="project-submit" class="primary" type="submit">创建项目</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="design-dialog" class="form-dialog design-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">项目视觉规范</p>
+          <h2>DESIGN.md</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <pre id="design-content" class="design-content"></pre>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-design-dialog" class="form-dialog delete-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow danger-text">移除视觉规范</p>
+          <h2>移除 DESIGN.md？</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <p class="delete-message">后续生成任务将不再应用这份视觉规范，已有素材不会被修改。</p>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>取消</button>
+        <button id="confirm-remove-design" class="danger-button" type="button">确认移除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="delete-dialog" class="form-dialog delete-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow danger-text">永久删除</p>
+          <h2>删除这个项目？</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <p id="delete-message" class="delete-message"></p>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>取消</button>
+        <button id="confirm-delete" class="danger-button" type="button">永久删除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true" aria-label="素材预览">
+    <button id="lightbox-close" class="lightbox-close" type="button" aria-label="关闭预览">×</button>
+    <div id="lightbox-stage" class="lightbox-stage"></div>
+    <div class="lightbox-toolbar">
+      <span id="lightbox-caption"></span>
+      <button id="lightbox-upload" class="lightbox-upload" type="button">重新上传</button>
+    </div>
+  </div>
+
+  <input
+    id="media-upload"
+    type="file"
+    accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
+    hidden
+  />
+  <input id="project-design-upload" type="file" accept=".md,text/markdown,text/plain" hidden />
+  <input id="design-upload" type="file" accept=".md,text/markdown,text/plain" hidden />
+  <div id="select-portal"></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
