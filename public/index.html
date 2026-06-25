@@ -82,7 +82,12 @@
             </button>
           </div>
         </div>
-        <button id="generate-all" class="secondary">批量生成</button>
+        <select id="project-config-select" class="header-select" aria-label="项目默认模型配置"></select>
+        <button id="open-model-configs" class="secondary">模型配置</button>
+        <button id="open-asset-library" class="secondary">物料库</button>
+        <button id="generate-materials" class="secondary">批量物料图</button>
+        <button id="generate-storyboards" class="secondary">批量故事板</button>
+        <button id="generate-all" class="secondary">逐条视频</button>
         <button id="add-shot-top" class="primary">＋ 新增镜头</button>
       </div>
     </div>
@@ -107,8 +112,8 @@
           <col class="col-roll" />
           <col class="col-media" />
           <col class="col-duration" />
-          <col class="col-dialogue" />
           <col class="col-visual" />
+          <col class="col-input-assets" />
           <col class="col-generator" />
           <col class="col-preview" />
           <col class="col-notes" />
@@ -120,8 +125,8 @@
             <th>镜头</th>
             <th>媒体</th>
             <th>时长</th>
-            <th>台词文案</th>
             <th>画面描述 / 生成提示词</th>
+            <th>输入物料</th>
             <th>生成方式</th>
             <th>素材预览</th>
             <th>备注</th>
@@ -167,8 +172,8 @@
           <span>秒</span>
         </div>
       </td>
-      <td><textarea data-field="dialogue" placeholder="输入这一镜的台词"></textarea></td>
-      <td><textarea data-field="visualPrompt" placeholder="描述画面，也作为生成提示词"></textarea></td>
+      <td><textarea data-field="visualPrompt" placeholder="描述画面、台词、声音和生成提示词"></textarea></td>
+      <td><div class="asset-ref-cell"></div></td>
       <td><div data-select-field="generator"></div></td>
       <td class="preview-cell">
         <div class="preview-stack">
@@ -232,6 +237,86 @@
     </form>
   </dialog>
 
+  <dialog id="settings-dialog" class="form-dialog settings-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">全局设置</p>
+          <h2>模型配置</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <div class="panel-heading">
+        <label class="form-field compact-field">
+          <span>全局默认</span>
+          <select id="default-config-key"></select>
+        </label>
+        <button id="add-model-config" class="secondary compact-button" type="button">新增配置</button>
+      </div>
+      <div id="model-config-list" class="model-config-list"></div>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>关闭</button>
+        <button id="save-settings" class="primary" type="button">保存配置</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="asset-library-dialog" class="form-dialog settings-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">全局设置</p>
+          <h2>物料库</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <section class="asset-library-panel">
+        <div class="panel-heading">
+          <strong>物料库</strong>
+          <button id="choose-asset-upload" class="secondary compact-button" type="button">新增物料</button>
+        </div>
+        <div id="asset-library-list" class="asset-library-list"></div>
+      </section>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="asset-picker-dialog" class="form-dialog asset-picker-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">输入物料</p>
+          <h2>选择引用</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <div id="asset-picker-list" class="asset-picker-list"></div>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>取消</button>
+        <button id="apply-asset-picker" class="primary" type="button">应用引用</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="video-confirm-dialog" class="form-dialog delete-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow danger-text">视频生成确认</p>
+          <h2>提交单个视频任务？</h2>
+        </div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
+      </div>
+      <p id="video-confirm-message" class="delete-message"></p>
+      <div class="dialog-actions">
+        <button class="secondary" type="button" data-close-dialog>取消</button>
+        <button id="confirm-video-generation" class="danger-button" type="button">确认生成</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="remove-design-dialog" class="form-dialog delete-dialog">
     <form method="dialog">
       <div class="dialog-heading">
@@ -279,6 +364,12 @@
     id="media-upload"
     type="file"
     accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
+    hidden
+  />
+  <input
+    id="asset-upload"
+    type="file"
+    accept="image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/mp3,audio/wav,audio/mp4,audio/aac"
     hidden
   />
   <input id="project-design-upload" type="file" accept=".md,text/markdown,text/plain" hidden />

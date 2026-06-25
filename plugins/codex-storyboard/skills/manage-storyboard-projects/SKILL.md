@@ -19,17 +19,17 @@ Each shot should include:
 - `rollType`: `A-ROLL` for primary presentation or spoken footage; `B-ROLL` for supporting visuals.
 - `mediaType`: `image` or `video`.
 - `duration`: seconds.
-- `dialogue`: spoken line for the shot.
-- `visualPrompt`: concrete visual description used for asset generation.
-- `generator`: `manual`, `image-gen`, `hyperframes`, or `remotion`.
+- `visualPrompt`: concrete visual description used for asset generation, including dialogue, sound, subtitles, and motion notes when relevant.
+- `inputAssetRefs`: optional material library asset IDs to use as references.
+- `generator`: `image-gen` or `jimeng-cli`.
 - `notes`: editing, pacing, transition, or production notes.
 
 Choose `generator` deliberately:
 
-- `manual`: recorded presenter footage, screen recordings, or existing local material.
-- `image-gen`: a static generated visual.
-- `hyperframes`: designed motion graphics or interface animation.
-- `remotion`: programmatic React-based video composition.
+- `image-gen`: a static generated visual using the built-in image generation tool.
+- `jimeng-cli`: image generation through Jimeng CLI, and all video generation.
+
+When a project should use recurring characters, scenes, or style references, call `list_storyboard_assets` first and set matching `inputAssetRefs` on the relevant shots. The storyboard server also auto-references library assets by name, person name, alias, and tag when generation tasks are queued.
 
 ## Find and inspect
 

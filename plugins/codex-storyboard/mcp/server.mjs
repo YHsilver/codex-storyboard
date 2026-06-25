@@ -51,11 +51,11 @@ function shotSchema({ requireId = false } = {}) {
       rollType: { type: "string", enum: ["A-ROLL", "B-ROLL"] },
       mediaType: { type: "string", enum: ["image", "video"] },
       duration: { type: "number", minimum: 0 },
-      dialogue: { type: "string" },
       visualPrompt: { type: "string" },
+      inputAssetRefs: { type: "array", items: { type: "string" } },
       generator: {
         type: "string",
-        enum: ["manual", "image-gen", "hyperframes", "remotion"]
+        enum: ["image-gen", "jimeng-cli"]
       },
       notes: { type: "string" }
     },
@@ -204,6 +204,25 @@ function tools() {
       }
     },
     {
+      name: "list_storyboard_assets",
+      title: "List Storyboard Assets",
+      description: "List material library assets that can be referenced by storyboard shots.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Optional case-insensitive search over name, person, aliases, and tags." },
+          storyboardUrl: { type: "string", description: `Storyboard URL. Defaults to ${DEFAULT_URL}.` }
+        },
+        additionalProperties: false
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
+    {
       name: "list_storyboard_generation_tasks",
       title: "List Storyboard Generation Tasks",
       description: "List pending, processing, ready, or failed image/video generation tasks from the local Codex storyboard.",
@@ -228,11 +247,33 @@ function tools() {
     {
       name: "claim_storyboard_generation_task",
       title: "Claim Storyboard Generation Task",
-      description: "Mark a pending storyboard task as processing before starting Image Generation, HyperFrames, or Remotion work.",
+      description: "Mark a pending storyboard task as processing before starting Image Generation or Jimeng CLI work.",
       inputSchema: {
         type: "object",
         properties: {
           taskId: { type: "string" },
+          storyboardUrl: { type: "string" }
+        },
+        required: ["taskId"],
+        additionalProperties: false
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    {
+      name: "update_storyboard_generation_task",
+      title: "Update Storyboard Generation Task",
+      description: "Save async generation metadata such as a Jimeng submit_id while a task remains processing.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          taskId: { type: "string" },
+          jimengSubmitId: { type: "string" },
+          error: { type: "string" },
           storyboardUrl: { type: "string" }
         },
         required: ["taskId"],
@@ -255,6 +296,11 @@ function tools() {
           taskId: { type: "string" },
           sourcePath: { type: "string", description: "Absolute path to the generated PNG/JPEG/WebP/MP4/WebM/MOV." },
           mediaType: { type: "string", enum: ["image", "video"] },
+          jimengSubmitId: { type: "string" },
+          assetName: { type: "string" },
+          personName: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          aliases: { type: "array", items: { type: "string" } },
           storyboardUrl: { type: "string" }
         },
         required: ["taskId", "sourcePath"],
@@ -443,13 +489,39 @@ async function callTool(id, params) {
     return;
   }
 
+  if (params?.name === "list_storyboard_assets") {
+    const result = await requestJson("/api/assets", {}, args);
+    const query = String(args.query || "").trim().toLocaleLowerCase();
+    const assets = (result.assets || []).filter((asset) => {
+      const text = [
+        asset.name,
+        asset.personName,
+        ...(asset.aliases || []),
+        ...(asset.tags || [])
+      ].join(" ").toLocaleLowerCase();
+      return !query || text.includes(query);
+    });
+    sendResult(id, {
+      content: [{
+        type: "text",
+        text: assets.length === 0
+          ? "No matching storyboard assets."
+          : assets.map((asset) =>
+            `${asset.id} | ${asset.type} | ${asset.name} | person: ${asset.personName || "none"} | tags: ${(asset.tags || []).join(",") || "none"}`
+          ).join("\n")
+      }],
+      structuredContent: { assets }
+    });
+    return;
+  }
+
   if (params?.name === "list_storyboard_generation_tasks") {
     const status = encodeURIComponent(args.status || "pending");
     const result = await requestJson(`/api/generation/tasks?status=${status}`, {}, args);
     const summary = result.tasks.length === 0
       ? "No matching storyboard generation tasks."
       : result.tasks
-          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.generator} | ${task.mediaType} | ${task.status} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\n${task.visualPrompt}`)
+          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
           .join("\n\n");
     sendResult(id, {
       content: [{ type: "text", text: summary }],
@@ -474,11 +546,32 @@ async function callTool(id, params) {
   if (params?.name === "complete_storyboard_generation_task") {
     const result = await requestJson(
       `/api/generation/tasks/${encodeURIComponent(args.taskId)}/complete`,
-      jsonOptions({ sourcePath: args.sourcePath, mediaType: args.mediaType }),
+      jsonOptions({
+        sourcePath: args.sourcePath,
+        mediaType: args.mediaType,
+        jimengSubmitId: args.jimengSubmitId,
+        assetName: args.assetName,
+        personName: args.personName,
+        tags: args.tags,
+        aliases: args.aliases
+      }),
       args
     );
     sendResult(id, {
       content: [{ type: "text", text: `Completed ${args.taskId}; asset returned to ${result.task.projectTitle}, shot ${result.task.shotIndex}.` }],
+      structuredContent: result
+    });
+    return;
+  }
+
+  if (params?.name === "update_storyboard_generation_task") {
+    const result = await requestJson(
+      `/api/generation/tasks/${encodeURIComponent(args.taskId)}/update`,
+      jsonOptions({ jimengSubmitId: args.jimengSubmitId, error: args.error }),
+      args
+    );
+    sendResult(id, {
+      content: [{ type: "text", text: `Updated ${args.taskId}${args.jimengSubmitId ? ` submit_id=${args.jimengSubmitId}` : ""}.` }],
       structuredContent: result
     });
     return;
@@ -509,7 +602,7 @@ async function handle(message) {
       capabilities: { tools: {} },
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       instructions:
-        "Use project tools to create and manage storyboard projects directly through the local API. Use generation tools to process queued assets. Never edit data files directly or complete a generation task before verifying its output."
+        "Use project tools to create and manage storyboard projects directly through the local API. Use generation tools to process queued assets with Image Generation or Jimeng CLI. Never edit data files directly or complete a generation task before verifying its output."
     });
     return;
   }

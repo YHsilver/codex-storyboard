@@ -8,12 +8,18 @@ const saveStatus = document.querySelector("#save-status");
 const durationTotal = document.querySelector("#duration-total");
 const selectPortal = document.querySelector("#select-portal");
 const generateAllButton = document.querySelector("#generate-all");
+const generateMaterialsButton = document.querySelector("#generate-materials");
+const generateStoryboardsButton = document.querySelector("#generate-storyboards");
 const projectDialog = document.querySelector("#project-dialog");
 const projectForm = document.querySelector("#project-form");
 const projectNameInput = document.querySelector("#project-name-input");
 const ratioOptions = document.querySelector("#ratio-options");
 const deleteDialog = document.querySelector("#delete-dialog");
 const mediaUpload = document.querySelector("#media-upload");
+const assetUpload = document.querySelector("#asset-upload");
+const settingsDialog = document.querySelector("#settings-dialog");
+const assetPickerDialog = document.querySelector("#asset-picker-dialog");
+const videoConfirmDialog = document.querySelector("#video-confirm-dialog");
 const projectDesignOption = document.querySelector("#project-design-option");
 const projectDesignUpload = document.querySelector("#project-design-upload");
 const designUpload = document.querySelector("#design-upload");
@@ -39,15 +45,15 @@ const selectOptions = {
     { value: "video", label: "视频" }
   ],
   generator: [
-    { value: "manual", label: "手动素材" },
     { value: "image-gen", label: "Image Generation" },
-    { value: "hyperframes", label: "HyperFrames" },
-    { value: "remotion", label: "Remotion" }
+    { value: "jimeng-cli", label: "即梦 CLI" }
   ]
 };
 
 let project = null;
 let projects = [];
+let settings = null;
+let assetLibrary = [];
 let saveTimer;
 let savePromise = Promise.resolve();
 let pollTimer;
@@ -61,6 +67,9 @@ let toastTimer;
 let pendingProjectDesign = null;
 let designMenuPinned = false;
 let designMenuCloseTimer;
+let assetPickerShotId = "";
+let assetUploadShotId = "";
+let videoConfirmShotId = "";
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -111,9 +120,19 @@ function emptyShot() {
     rollType: "B-ROLL",
     mediaType: "image",
     duration: 5,
-    dialogue: "",
     visualPrompt: "",
     generator: "image-gen",
+    inputAssetRefs: [],
+    materialPrompt: "",
+    materialAssetRefs: [],
+    materialStatus: "idle",
+    materialTaskId: "",
+    materialError: "",
+    storyboardPrompt: "",
+    storyboardUrl: "",
+    storyboardStatus: "idle",
+    storyboardTaskId: "",
+    storyboardError: "",
     mediaUrl: "",
     notes: "",
     generationStatus: "idle",
@@ -128,7 +147,6 @@ function formatDuration(seconds) {
 }
 
 function generationLabel(shot) {
-  if (shot.generator === "manual") return shot.mediaUrl ? "本地素材" : "等待上传";
   return {
     idle: "未生成",
     pending: "等待处理",
@@ -138,29 +156,49 @@ function generationLabel(shot) {
   }[shot.generationStatus] || "未生成";
 }
 
+function statusLabel(status, error = "") {
+  return {
+    idle: "未生成",
+    pending: "等待处理",
+    processing: "生成中",
+    ready: "已完成",
+    failed: error || "生成失败"
+  }[status] || "未生成";
+}
+
 function generationButtonLabel(shot) {
-  if (shot.generator === "manual") return shot.mediaUrl ? "重新上传" : "本地上传";
   if (shot.generationStatus === "pending") return "取消队列";
   if (shot.generationStatus === "processing") return "生成中";
   if (!shot.visualPrompt.trim() && !["pending", "processing"].includes(shot.generationStatus)) {
     return "填写画面描述";
   }
   if (shot.generationStatus === "ready" || shot.generationStatus === "failed") return "重新生成";
-  return "生成素材";
+  return shot.mediaType === "video" ? "生成视频" : "生成图片";
 }
 
-function isBatchGeneratable(shot) {
+function canQueueStage(shot, stage) {
+  if (!shot.visualPrompt.trim()) return false;
+  if (stage === "materials") return !["pending", "processing", "ready"].includes(shot.materialStatus);
+  if (stage === "storyboard") {
+    return (shot.inputAssetRefs?.length > 0 || shot.materialAssetRefs?.length > 0) &&
+      !["pending", "processing", "ready"].includes(shot.storyboardStatus);
+  }
   return (
-    shot.generator !== "manual" &&
-    Boolean(shot.visualPrompt.trim()) &&
-    shot.generationStatus !== "ready"
+    Boolean(shot.storyboardUrl) &&
+    !["pending", "processing", "ready"].includes(shot.videoStatus || shot.generationStatus)
   );
 }
 
 function updateBatchButton() {
-  const count = project?.shots.filter(isBatchGeneratable).length || 0;
-  generateAllButton.disabled = count === 0;
-  generateAllButton.textContent = count > 0 ? `批量生成 ${count}` : "批量生成";
+  const materialCount = project?.shots.filter((shot) => canQueueStage(shot, "materials")).length || 0;
+  const storyboardCount = project?.shots.filter((shot) => canQueueStage(shot, "storyboard")).length || 0;
+  const nextVideo = project?.shots.find((shot) => canQueueStage(shot, "video"));
+  generateMaterialsButton.disabled = materialCount === 0;
+  generateMaterialsButton.textContent = materialCount > 0 ? `批量物料图 ${materialCount}` : "批量物料图";
+  generateStoryboardsButton.disabled = storyboardCount === 0;
+  generateStoryboardsButton.textContent = storyboardCount > 0 ? `批量故事板 ${storyboardCount}` : "批量故事板";
+  generateAllButton.disabled = !nextVideo;
+  generateAllButton.textContent = nextVideo ? "确认下个视频" : "逐条视频";
 }
 
 function projectPath(projectId) {
@@ -226,6 +264,15 @@ async function loadProjects() {
   renderProjects();
 }
 
+async function loadSettingsAndAssets() {
+  const [settingsResult, assetsResult] = await Promise.all([
+    api("/api/settings"),
+    api("/api/assets")
+  ]);
+  settings = settingsResult;
+  assetLibrary = assetsResult.assets || [];
+}
+
 function renderProjects() {
   projectsGrid.replaceChildren();
   document.querySelector("#project-count").textContent = `${projects.length} 个项目`;
@@ -265,7 +312,11 @@ function renderProjects() {
 
 async function loadProject(projectId) {
   try {
-    project = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+    const [loadedProject] = await Promise.all([
+      api(`/api/projects/${encodeURIComponent(projectId)}`),
+      loadSettingsAndAssets()
+    ]);
+    project = loadedProject;
     renderStoryboard();
     startPolling();
   } catch (error) {
@@ -312,19 +363,25 @@ function renderPreview(shot, index) {
   preview.className = "preview";
   frame.append(preview);
 
+  if (!shot.mediaUrl && shot.storyboardUrl) {
+    const image = document.createElement("img");
+    image.src = shot.storyboardUrl;
+    image.alt = shot.visualPrompt || `镜头 ${index + 1} 故事板图`;
+    preview.append(image);
+    const label = document.createElement("span");
+    label.className = "media-kind";
+    label.textContent = "STORY";
+    preview.append(label);
+    preview.disabled = true;
+    return frame;
+  }
+
   if (!shot.mediaUrl) {
     const empty = document.createElement("span");
     empty.className = "empty-preview";
-    empty.textContent = shot.generator === "manual"
-      ? "点击上传图片/视频"
-      : shot.mediaType === "video" ? "等待视频素材" : "等待图片素材";
+    empty.textContent = shot.storyboardUrl ? "故事板图已完成" : "等待最终视频";
     preview.append(empty);
-    if (shot.generator === "manual") {
-      preview.classList.add("is-uploadable");
-      preview.addEventListener("click", () => chooseUpload(shot.id));
-    } else {
-      preview.disabled = true;
-    }
+    preview.disabled = true;
     return frame;
   }
 
@@ -400,6 +457,104 @@ async function deleteMedia(shot) {
   }
 }
 
+function assetById(assetId) {
+  return assetLibrary.find((asset) => asset.id === assetId);
+}
+
+function renderAssetThumb(asset) {
+  const thumb = document.createElement("span");
+  thumb.className = "asset-thumb";
+  if (asset?.type === "image" && asset.url) {
+    const image = document.createElement("img");
+    image.src = asset.url;
+    image.alt = asset.name;
+    thumb.append(image);
+  } else {
+    thumb.textContent = asset?.type === "audio" ? "音频" : "图片";
+  }
+  return thumb;
+}
+
+function renderAssetRefs(container, shot) {
+  container.replaceChildren();
+  const list = document.createElement("div");
+  list.className = "asset-ref-list";
+  const refs = Array.isArray(shot.inputAssetRefs) ? shot.inputAssetRefs : [];
+  if (refs.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "empty-preview";
+    empty.textContent = "未引用输入物料";
+    list.append(empty);
+  }
+  refs.forEach((assetId) => {
+    const asset = assetById(assetId);
+    if (!asset) return;
+    const item = document.createElement("div");
+    item.className = "asset-ref-item";
+    const meta = document.createElement("span");
+    meta.className = "asset-meta";
+    const name = document.createElement("strong");
+    name.textContent = asset.name;
+    const detail = document.createElement("span");
+    detail.textContent = asset.type === "audio" ? "音频参考" : "图片参考";
+    meta.append(name, detail);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-asset-ref";
+    remove.textContent = "移除";
+    remove.addEventListener("click", () => {
+      shot.inputAssetRefs = refs.filter((id) => id !== assetId);
+      renderAssetRefs(container, shot);
+      queueSave();
+    });
+    item.append(renderAssetThumb(asset), meta, remove);
+    list.append(item);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "asset-ref-actions";
+  const pick = document.createElement("button");
+  pick.type = "button";
+  pick.textContent = "选择";
+  pick.addEventListener("click", () => openAssetPicker(shot.id));
+  const upload = document.createElement("button");
+  upload.type = "button";
+  upload.textContent = "上传";
+  upload.addEventListener("click", () => chooseAssetUpload(shot.id));
+  actions.append(pick, upload);
+  container.append(list, actions);
+}
+
+function chooseAssetUpload(shotId = "") {
+  assetUploadShotId = shotId;
+  assetUpload.value = "";
+  assetUpload.click();
+}
+
+async function uploadAsset(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const result = await api("/api/assets", { method: "POST", body: form });
+    assetLibrary = result.assets || [];
+    if (assetUploadShotId && project) {
+      const shot = project.shots.find((item) => item.id === assetUploadShotId);
+      if (shot) {
+        shot.inputAssetRefs = [...new Set([...(shot.inputAssetRefs || []), result.asset.id])];
+        queueSave();
+      }
+    }
+    renderStoryboard();
+    renderSettingsDialog();
+    showToast("物料已添加");
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    assetUploadShotId = "";
+  }
+}
+
 function openLightbox(shot, index) {
   lightboxShotId = shot.id;
   lightboxStage.replaceChildren();
@@ -456,7 +611,9 @@ function openSelect(trigger, field, shot, onChange) {
   menu.className = "select-menu";
   menu.setAttribute("role", "listbox");
   menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
-  const options = selectOptions[field];
+  const options = field === "generator" && shot.mediaType === "video"
+    ? selectOptions.generator.filter((option) => option.value === "jimeng-cli")
+    : selectOptions[field];
 
   options.forEach((option, index) => {
     const button = document.createElement("button");
@@ -592,11 +749,7 @@ function renderStoryboard() {
         updateSummary();
         if (field === "visualPrompt") {
           updateBatchButton();
-          const generateButton = row.querySelector(".generate-shot");
-          generateButton.textContent = generationButtonLabel(shot);
-          generateButton.disabled =
-            shot.generationStatus === "processing" ||
-            (shot.generationStatus !== "pending" && !shot.visualPrompt.trim());
+          renderPipelineControls(row.querySelector(".generation-controls"), shot);
         }
         queueSave();
       });
@@ -605,31 +758,19 @@ function renderStoryboard() {
     row.querySelectorAll("[data-select-field]").forEach((container) => {
       const field = container.dataset.selectField;
       renderSelect(container, field, shot, (changedField) => {
-        if (changedField === "generator" || changedField === "mediaType") renderStoryboard();
+        if (changedField === "mediaType") {
+          shot.generator = shot.mediaType === "video" ? "jimeng-cli" : "image-gen";
+          renderStoryboard();
+        }
+        if (changedField === "generator") renderStoryboard();
         queueSave();
       });
     });
 
+    if (shot.mediaType === "video" && shot.generator !== "jimeng-cli") shot.generator = "jimeng-cli";
+    renderAssetRefs(row.querySelector(".asset-ref-cell"), shot);
     row.querySelector(".preview-slot").append(renderPreview(shot, index));
-    const status = row.querySelector(".generation-status");
-    status.textContent = generationLabel(shot);
-    status.dataset.status = shot.generationStatus || "idle";
-    status.title = shot.generationError || "";
-
-    const generateButton = row.querySelector(".generate-shot");
-    generateButton.textContent = generationButtonLabel(shot);
-    generateButton.disabled =
-      shot.generationStatus === "processing" ||
-      (shot.generator !== "manual" && !shot.visualPrompt.trim());
-    generateButton.dataset.action = shot.generationStatus === "pending" ? "cancel" : "generate";
-    generateButton.addEventListener("click", () => {
-      if (shot.generator === "manual") return chooseUpload(shot.id);
-      if (shot.generationStatus === "pending") return cancelGeneration(shot);
-      return queueGeneration(
-        [shot.id],
-        shot.generationStatus === "ready" || shot.generationStatus === "failed"
-      );
-    });
+    renderPipelineControls(row.querySelector(".generation-controls"), shot);
 
     row.querySelector(".delete-shot").addEventListener("click", async () => {
       await api(
@@ -659,6 +800,218 @@ function renderDesignState() {
   document.querySelector("#import-design").textContent = hasDesign
     ? "替换 DESIGN.md"
     : "导入 DESIGN.md";
+}
+
+function renderSettingsDialog() {
+  if (!settings) return;
+  document.querySelector("#setting-image-model").value = settings.jimeng.imageModel;
+  document.querySelector("#setting-video-model").value = settings.jimeng.videoModel;
+  document.querySelector("#setting-image-resolution").value = settings.jimeng.imageResolution;
+  document.querySelector("#setting-video-resolution").value = settings.jimeng.videoResolution;
+  document.querySelector("#setting-queue").value = settings.jimeng.queue || "";
+  document.querySelector("#setting-poll").value = settings.jimeng.pollSeconds;
+  document.querySelector("#setting-session").value = settings.jimeng.sessionStrategy;
+  document.querySelector("#setting-fixed-prefix").value = settings.promptTemplates.fixedPrefix;
+  document.querySelector("#setting-reference-template").value = settings.promptTemplates.referenceTemplate;
+
+  const list = document.querySelector("#asset-library-list");
+  list.replaceChildren();
+  if (assetLibrary.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "delete-message";
+    empty.textContent = "暂无物料。";
+    list.append(empty);
+    return;
+  }
+  assetLibrary.forEach((asset) => {
+    const card = document.createElement("article");
+    card.className = "asset-card";
+    const fields = document.createElement("div");
+    fields.className = "asset-card-fields";
+    const name = Object.assign(document.createElement("input"), { value: asset.name, placeholder: "名称" });
+    const personName = Object.assign(document.createElement("input"), { value: asset.personName || "", placeholder: "人物名" });
+    const aliases = Object.assign(document.createElement("input"), { value: (asset.aliases || []).join(", "), placeholder: "别名，逗号分隔" });
+    const tags = Object.assign(document.createElement("input"), { value: (asset.tags || []).join(", "), placeholder: "标签，逗号分隔" });
+    [name, personName, aliases, tags].forEach((input) => {
+      input.addEventListener("change", () => updateAsset(asset.id, {
+        name: name.value,
+        personName: personName.value,
+        aliases: aliases.value.split(","),
+        tags: tags.value.split(",")
+      }));
+    });
+    fields.append(name, personName, aliases, tags);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete-asset";
+    remove.textContent = "删除";
+    remove.addEventListener("click", () => deleteAsset(asset.id));
+    card.append(renderAssetThumb(asset), fields, remove);
+    list.append(card);
+  });
+}
+
+async function openSettingsDialog() {
+  await loadSettingsAndAssets();
+  renderSettingsDialog();
+  settingsDialog.showModal();
+}
+
+async function saveSettingsFromDialog() {
+  const next = {
+    jimeng: {
+      imageModel: document.querySelector("#setting-image-model").value,
+      videoModel: document.querySelector("#setting-video-model").value,
+      imageResolution: document.querySelector("#setting-image-resolution").value,
+      videoResolution: document.querySelector("#setting-video-resolution").value,
+      queue: document.querySelector("#setting-queue").value,
+      pollSeconds: Number(document.querySelector("#setting-poll").value),
+      sessionStrategy: document.querySelector("#setting-session").value
+    },
+    promptTemplates: {
+      fixedPrefix: document.querySelector("#setting-fixed-prefix").value,
+      referenceTemplate: document.querySelector("#setting-reference-template").value
+    }
+  };
+  settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(next) });
+  renderSettingsDialog();
+  showToast("配置已保存");
+}
+
+async function updateAsset(assetId, update) {
+  const result = await api(`/api/assets/${encodeURIComponent(assetId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(update)
+  });
+  assetLibrary = result.assets || [];
+  renderStoryboard();
+}
+
+async function deleteAsset(assetId) {
+  const result = await api(`/api/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+  assetLibrary = result.assets || [];
+  if (project) project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
+  renderSettingsDialog();
+  renderStoryboard();
+  showToast("物料已删除");
+}
+
+function openAssetPicker(shotId) {
+  assetPickerShotId = shotId;
+  const shot = project.shots.find((item) => item.id === shotId);
+  const selected = new Set(shot?.inputAssetRefs || []);
+  const list = document.querySelector("#asset-picker-list");
+  list.replaceChildren();
+  if (assetLibrary.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "delete-message";
+    empty.textContent = "物料库为空，请先新增物料。";
+    list.append(empty);
+  }
+  assetLibrary.forEach((asset) => {
+    const label = document.createElement("label");
+    label.className = "asset-picker-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = asset.id;
+    checkbox.checked = selected.has(asset.id);
+    const meta = document.createElement("span");
+    meta.className = "asset-meta";
+    const name = document.createElement("strong");
+    name.textContent = asset.name;
+    const detail = document.createElement("span");
+    detail.textContent = [asset.personName, ...(asset.tags || [])].filter(Boolean).join(" · ") || asset.type;
+    meta.append(name, detail);
+    label.append(checkbox, renderAssetThumb(asset), meta);
+    list.append(label);
+  });
+  assetPickerDialog.showModal();
+}
+
+function applyAssetPicker() {
+  const shot = project.shots.find((item) => item.id === assetPickerShotId);
+  if (!shot) return;
+  shot.inputAssetRefs = [...document.querySelectorAll("#asset-picker-list input:checked")]
+    .map((input) => input.value);
+  assetPickerDialog.close();
+  assetPickerShotId = "";
+  renderStoryboard();
+  queueSave();
+}
+
+function stageInfo(shot, stage) {
+  if (stage === "materials") {
+    return {
+      status: shot.materialStatus || "idle",
+      taskId: shot.materialTaskId || "",
+      error: shot.materialError || "",
+      label: "物料图",
+      action: "生成物料"
+    };
+  }
+  if (stage === "storyboard") {
+    return {
+      status: shot.storyboardStatus || "idle",
+      taskId: shot.storyboardTaskId || "",
+      error: shot.storyboardError || "",
+      label: "故事板",
+      action: "生成故事板"
+    };
+  }
+  return {
+    status: shot.videoStatus || shot.generationStatus || "idle",
+    taskId: shot.videoTaskId || shot.generationTaskId || "",
+    error: shot.videoError || shot.generationError || "",
+    label: "视频",
+    action: "生成视频"
+  };
+}
+
+function stageButtonLabel(shot, stage) {
+  const info = stageInfo(shot, stage);
+  if (info.status === "pending") return "取消";
+  if (info.status === "processing") return "生成中";
+  if (info.status === "ready" || info.status === "failed") return `重生成${info.label}`;
+  return info.action;
+}
+
+function renderPipelineControls(container, shot) {
+  container.replaceChildren();
+  ["materials", "storyboard", "video"].forEach((stage) => {
+    const info = stageInfo(shot, stage);
+    const row = document.createElement("div");
+    row.className = "pipeline-stage";
+    row.dataset.stage = stage;
+
+    const status = document.createElement("span");
+    status.className = "generation-status";
+    status.dataset.status = info.status;
+    status.title = info.error;
+    status.textContent = `${info.label}：${statusLabel(info.status, info.error)}`;
+
+    const button = document.createElement("button");
+    button.className = "generate-shot";
+    button.type = "button";
+    button.textContent = stageButtonLabel(shot, stage);
+    button.dataset.action = info.status === "pending" ? "cancel" : "generate";
+    button.disabled =
+      info.status === "processing" ||
+      !shot.visualPrompt.trim() ||
+      (stage === "storyboard" && !(shot.inputAssetRefs?.length || shot.materialAssetRefs?.length)) ||
+      (stage === "video" && !shot.storyboardUrl);
+    button.addEventListener("click", () => {
+      if (info.status === "pending") return cancelGeneration({ generationTaskId: info.taskId });
+      if (stage === "video") return confirmVideoGeneration(shot);
+      return queueGeneration(
+        [shot.id],
+        info.status === "ready" || info.status === "failed",
+        { stage }
+      );
+    });
+
+    row.append(status, button);
+    container.append(row);
+  });
 }
 
 function openDesignMenu() {
@@ -752,13 +1105,26 @@ async function cancelGeneration(shot) {
   }
 }
 
-async function queueGeneration(shotIds, force = false) {
+function confirmVideoGeneration(shot) {
+  videoConfirmShotId = shot.id;
+  document.querySelector("#video-confirm-message").textContent =
+    `即将提交镜头 ${project.shots.indexOf(shot) + 1} 的视频生成任务。会同时引用物料图和故事板图，视频任务会消耗额度，且每次只能提交一个。`;
+  videoConfirmDialog.showModal();
+}
+
+async function queueGeneration(shotIds, force = false, options = {}) {
   saveStatus.textContent = "提交生成任务…";
   try {
     await flushSave();
     const result = await api("/api/generation/tasks", {
       method: "POST",
-      body: JSON.stringify({ projectId: project.id, shotIds, force })
+      body: JSON.stringify({
+        projectId: project.id,
+        shotIds,
+        force,
+        stage: options.stage || "video",
+        videoConfirmed: options.videoConfirmed === true
+      })
     });
     project = result.project;
     saveStatus.textContent = result.queued.length > 0
@@ -806,6 +1172,7 @@ themeButtons.forEach((button) => button.addEventListener("click", toggleTheme));
 document.querySelector("#create-project").addEventListener("click", () => openProjectDialog("create"));
 document.querySelector("#brand-home").addEventListener("click", () => navigate("/"));
 document.querySelector("#back-home").addEventListener("click", () => navigate("/"));
+document.querySelector("#open-settings").addEventListener("click", openSettingsDialog);
 document.querySelector("#add-shot-top").addEventListener("click", addShot);
 document.querySelector("#add-shot-bottom").addEventListener("click", addShot);
 
@@ -852,11 +1219,33 @@ document.querySelector("#confirm-delete").addEventListener("click", async (event
 });
 
 generateAllButton.addEventListener("click", async () => {
-  const shotIds = project.shots.filter(isBatchGeneratable).map((shot) => shot.id);
-  await queueGeneration(shotIds, true);
+  const shot = project.shots.find((item) => canQueueStage(item, "video"));
+  if (shot) confirmVideoGeneration(shot);
+});
+generateMaterialsButton.addEventListener("click", async () => {
+  const shotIds = project.shots.filter((shot) => canQueueStage(shot, "materials")).map((shot) => shot.id);
+  await queueGeneration(shotIds, true, { stage: "materials" });
+});
+generateStoryboardsButton.addEventListener("click", async () => {
+  const shotIds = project.shots.filter((shot) => canQueueStage(shot, "storyboard")).map((shot) => shot.id);
+  await queueGeneration(shotIds, true, { stage: "storyboard" });
 });
 
 mediaUpload.addEventListener("change", () => uploadMedia(mediaUpload.files?.[0]));
+assetUpload.addEventListener("change", () => uploadAsset(assetUpload.files?.[0]));
+document.querySelector("#choose-asset-upload").addEventListener("click", () => chooseAssetUpload(""));
+document.querySelector("#save-settings").addEventListener("click", saveSettingsFromDialog);
+document.querySelector("#apply-asset-picker").addEventListener("click", applyAssetPicker);
+document.querySelector("#confirm-video-generation").addEventListener("click", async () => {
+  const shot = project.shots.find((item) => item.id === videoConfirmShotId);
+  videoConfirmDialog.close();
+  videoConfirmShotId = "";
+  if (!shot) return;
+  await queueGeneration([shot.id], ["ready", "failed"].includes(shot.videoStatus || shot.generationStatus), {
+    stage: "video",
+    videoConfirmed: true
+  });
+});
 document.querySelector("#choose-project-design").addEventListener("click", () => {
   projectDesignUpload.value = "";
   projectDesignUpload.click();

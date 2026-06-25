@@ -2,5 +2,7 @@
 generation/
 data/projects.json
 data/projects/
+data/settings.json
+data/assets/
 data/media/
 data/storyboard.json
