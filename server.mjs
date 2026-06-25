@@ -585,6 +585,25 @@ function expandSubjectAssetRefs(subjectAssetRefs, assets) {
   ]);
 }
 
+function stageSelfAssetIds(shot, stage) {
+  if (stage === "materials") return uniqueStrings(shot.materialAssetRefs);
+  if (stage === "storyboard") return uniqueStrings([shot.storyboardAssetRef]);
+  return [];
+}
+
+function stageReferenceAssetIds(shot, subjectAssetRefs, automaticRefs, stage) {
+  const refs = [
+    ...shot.inputAssetRefs,
+    ...subjectAssetRefs,
+    ...automaticRefs
+  ];
+  if (stage === "storyboard" || stage === "video") {
+    refs.push(...shot.materialAssetRefs);
+  }
+  const selfAssetIds = new Set(stageSelfAssetIds(shot, stage));
+  return uniqueStrings(refs).filter((assetId) => !selfAssetIds.has(assetId));
+}
+
 function stageMediaType(stage) {
   return stage === "video" ? "video" : "image";
 }
@@ -691,7 +710,7 @@ function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "
   const imageInputs = inputAssets.filter((asset) => asset.type === "image");
   return {
     provider: "jimeng-cli",
-    imageCommand: imageInputs.length > 0 && stage !== "materials" ? "image2image" : "text2image",
+    imageCommand: imageInputs.length > 0 ? "image2image" : "text2image",
     videoCommand: "multimodal2video",
     modelVersion: stage === "video"
       ? config.jimeng.videoModel
@@ -710,18 +729,19 @@ function projectMediaPathFromUrl(project, url) {
   return resolve(projectMediaDir(project.id), fileName);
 }
 
+function stageSelfUrls(shot, stage) {
+  if (stage === "storyboard") return uniqueStrings([shot.storyboardUrl, ...(shot.storyboardUrls || [])]);
+  if (stage === "video") return uniqueStrings([shot.mediaUrl, ...(shot.mediaUrls || [])]);
+  return [];
+}
+
 async function generationTask(project, shot, stage = "video") {
   const settings = await readSettings();
   const modelConfig = resolveModelConfig(settings, project, shot, stage);
   const library = await readAssetLibrary();
   const automaticRefs = autoReferencedAssetIds(shot, library.assets);
   const subjectAssetRefs = expandSubjectAssetRefs(shot.subjectAssetRefs, library.assets);
-  const inputAssetIds = uniqueStrings([
-    ...shot.inputAssetRefs,
-    ...subjectAssetRefs,
-    ...shot.materialAssetRefs,
-    ...automaticRefs
-  ]);
+  const inputAssetIds = stageReferenceAssetIds(shot, subjectAssetRefs, automaticRefs, stage);
   const inputAssets = inputAssetIds
     .map((assetId) => library.assets.find((asset) => asset.id === assetId))
     .filter(Boolean)
@@ -755,18 +775,22 @@ async function generationTask(project, shot, stage = "video") {
           autoReferenced: false
         });
       }
-    } else if (shot.storyboardUrl) {
+    }
+    const selfUrls = new Set(stageSelfUrls(shot, stage));
+    const storyboardUrls = uniqueStrings([shot.storyboardUrl, ...(shot.storyboardUrls || [])])
+      .filter((storyboardUrl) => !selfUrls.has(storyboardUrl));
+    storyboardUrls.forEach((storyboardUrl, index) => {
       inputAssets.push({
-        id: `${shot.id}-storyboard`,
+        id: `${shot.id}-storyboard-${index + 1}`,
         type: "image",
-        name: "故事板图",
-        url: shot.storyboardUrl,
-        path: projectMediaPathFromUrl(project, shot.storyboardUrl),
+        name: index === 0 ? "故事板图" : `故事板图 ${index + 1}`,
+        url: storyboardUrl,
+        path: projectMediaPathFromUrl(project, storyboardUrl),
         mimeType: "image/*",
         usage: "storyboard",
         autoReferenced: false
       });
-    }
+    });
   }
   const dimensions = aspectRatios[project.aspectRatio];
   const taskId = stageTaskId(shot, stage);
@@ -1159,7 +1183,7 @@ async function migrateLegacyProject() {
   const projectId = "project-codex-storyboard";
   let project = normalizeProject({
     id: projectId,
-    title: "Codex 分镜台",
+    title: "智能分镜台",
     aspectRatio: "16:9",
     shots: [],
     createdAt: now,
@@ -1170,7 +1194,7 @@ async function migrateLegacyProject() {
   project = normalizeProject({
     ...legacy,
     id: projectId,
-    title: legacy.title || "Codex 分镜台",
+    title: legacy.title || "智能分镜台",
     aspectRatio: "16:9",
     createdAt: now
   });
@@ -1753,5 +1777,5 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Codex 分镜台已启动：http://127.0.0.1:${port}`);
+  console.log(`智能分镜台已启动：http://127.0.0.1:${port}`);
 });

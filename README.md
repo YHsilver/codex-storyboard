@@ -67,23 +67,22 @@ data/
 
 ## 安装 Codex 插件
 
-仓库自带 `codex-storyboard` 插件和 Marketplace 配置。
-
 ```bash
-codex plugin marketplace add Yuuhann1999/codex-storyboard
+codex plugin marketplace add .
 codex plugin add codex-storyboard@codex-storyboard
 ```
+
 
 安装后重新打开 Codex 对话，然后输入：
 
 ```text
-创建一个 9:16 的“Codex 侧边栏 5 种用法”分镜项目，直接写入 Codex 分镜台
+创建一个 9:16 的“Codex 侧边栏 5 种用法”分镜项目，直接写入 智能分镜台
 ```
 
 或者处理素材生成队列：
 
 ```text
-处理 Codex 分镜台里所有待生成素材
+处理 智能分镜台里所有待生成素材
 ```
 
 也可以在 Codex 中引用插件：
@@ -104,14 +103,6 @@ codex plugin add codex-storyboard@codex-storyboard
 
 > Image Generation 是否可用，取决于当前 Codex 环境中已启用的能力。即梦 CLI 需要本机安装并登录 `dreamina`。
 
-## 手动安装本地插件
-
-如果你在修改插件源码，可以把当前仓库注册为本地 Marketplace：
-
-```bash
-codex plugin marketplace add .
-codex plugin add codex-storyboard@codex-storyboard
-```
 
 插件源码位于：
 

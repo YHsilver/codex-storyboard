@@ -320,7 +320,7 @@ function showProjectsView() {
   storyboardView.hidden = true;
   document.querySelector("#home-actions").hidden = false;
   document.querySelector("#storyboard-actions").hidden = true;
-  document.title = "Codex 分镜台";
+  document.title = "智能分镜台";
   return loadProjects();
 }
 
@@ -997,7 +997,7 @@ async function saveProject() {
 
 function renderStoryboard() {
   closeSelect();
-  document.title = `${project.title} · Codex 分镜台`;
+  document.title = `${project.title} · 智能分镜台`;
   document.querySelector("#project-title").textContent = project.title;
   document.querySelector("#project-ratio").textContent = project.aspectRatio;
   renderProjectConfigSelects();
