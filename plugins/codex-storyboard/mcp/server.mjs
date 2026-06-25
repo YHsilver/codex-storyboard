@@ -49,14 +49,15 @@ function shotSchema({ requireId = false } = {}) {
     properties: {
       ...(requireId ? { shotId: { type: "string" } } : {}),
       rollType: { type: "string", enum: ["A-ROLL", "B-ROLL"] },
-      mediaType: { type: "string", enum: ["image", "video"] },
       duration: { type: "number", minimum: 0 },
       visualPrompt: { type: "string" },
+      configKey: { type: "string" },
+      materialConfigKey: { type: "string" },
+      storyboardConfigKey: { type: "string" },
+      videoConfigKey: { type: "string" },
       inputAssetRefs: { type: "array", items: { type: "string" } },
-      generator: {
-        type: "string",
-        enum: ["image-gen", "jimeng-cli"]
-      },
+      materialAssetRefs: { type: "array", items: { type: "string" } },
+      storyboardAssetRef: { type: "string" },
       notes: { type: "string" }
     },
     ...(requireId ? { required: ["shotId"] } : {}),
@@ -136,6 +137,10 @@ function tools() {
         properties: {
           title: { type: "string" },
           aspectRatio: { type: "string", enum: ASPECT_RATIOS },
+          defaultConfigKey: { type: "string" },
+          materialConfigKey: { type: "string" },
+          storyboardConfigKey: { type: "string" },
+          videoConfigKey: { type: "string" },
           shots: { type: "array", items: shotSchema() },
           designPath: {
             type: "string",
@@ -163,6 +168,10 @@ function tools() {
           projectId: { type: "string" },
           title: { type: "string" },
           aspectRatio: { type: "string", enum: ASPECT_RATIOS },
+          defaultConfigKey: { type: "string" },
+          materialConfigKey: { type: "string" },
+          storyboardConfigKey: { type: "string" },
+          videoConfigKey: { type: "string" },
           appendShots: { type: "array", items: shotSchema() },
           shotUpdates: { type: "array", items: shotSchema({ requireId: true }) },
           deleteShotIds: { type: "array", items: { type: "string" } },
@@ -381,7 +390,14 @@ async function callTool(id, params) {
     try {
       project = await requestJson(
         "/api/projects",
-        jsonOptions({ title: args.title, aspectRatio: args.aspectRatio }),
+        jsonOptions({
+          title: args.title,
+          aspectRatio: args.aspectRatio,
+          defaultConfigKey: args.defaultConfigKey,
+          materialConfigKey: args.materialConfigKey,
+          storyboardConfigKey: args.storyboardConfigKey,
+          videoConfigKey: args.videoConfigKey
+        }),
         args
       );
       if (args.shots.length > 0) {
@@ -425,6 +441,10 @@ async function callTool(id, params) {
     );
     if (args.title !== undefined) project.title = args.title;
     if (args.aspectRatio !== undefined) project.aspectRatio = args.aspectRatio;
+    if (args.defaultConfigKey !== undefined) project.defaultConfigKey = args.defaultConfigKey;
+    if (args.materialConfigKey !== undefined) project.materialConfigKey = args.materialConfigKey;
+    if (args.storyboardConfigKey !== undefined) project.storyboardConfigKey = args.storyboardConfigKey;
+    if (args.videoConfigKey !== undefined) project.videoConfigKey = args.videoConfigKey;
 
     const updates = new Map((args.shotUpdates || []).map((shot) => [shot.shotId, shot]));
     for (const shotId of updates.keys()) {
@@ -447,6 +467,10 @@ async function callTool(id, params) {
       jsonOptions({
         title: project.title,
         aspectRatio: project.aspectRatio,
+        defaultConfigKey: project.defaultConfigKey,
+        materialConfigKey: project.materialConfigKey,
+        storyboardConfigKey: project.storyboardConfigKey,
+        videoConfigKey: project.videoConfigKey,
         shots: project.shots
       }, "PUT"),
       args

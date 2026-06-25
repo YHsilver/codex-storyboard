@@ -18,6 +18,7 @@ const deleteDialog = document.querySelector("#delete-dialog");
 const mediaUpload = document.querySelector("#media-upload");
 const assetUpload = document.querySelector("#asset-upload");
 const settingsDialog = document.querySelector("#settings-dialog");
+const assetLibraryDialog = document.querySelector("#asset-library-dialog");
 const assetPickerDialog = document.querySelector("#asset-picker-dialog");
 const videoConfirmDialog = document.querySelector("#video-confirm-dialog");
 const projectDesignOption = document.querySelector("#project-design-option");
@@ -39,14 +40,6 @@ const selectOptions = {
   rollType: [
     { value: "A-ROLL", label: "A-ROLL" },
     { value: "B-ROLL", label: "B-ROLL" }
-  ],
-  mediaType: [
-    { value: "image", label: "图片" },
-    { value: "video", label: "视频" }
-  ],
-  generator: [
-    { value: "image-gen", label: "Image Generation" },
-    { value: "jimeng-cli", label: "即梦 CLI" }
   ]
 };
 
@@ -62,12 +55,15 @@ let dialogMode = "create";
 let editingProjectId = "";
 let deletingProjectId = "";
 let uploadShotId = "";
+let uploadStage = "video";
 let lightboxShotId = "";
+let lightboxStageName = "video";
 let toastTimer;
 let pendingProjectDesign = null;
 let designMenuPinned = false;
 let designMenuCloseTimer;
 let assetPickerShotId = "";
+let assetPickerStage = "materials";
 let assetUploadShotId = "";
 let videoConfirmShotId = "";
 
@@ -118,10 +114,14 @@ function showToast(message, type = "info") {
 function emptyShot() {
   return {
     rollType: "B-ROLL",
-    mediaType: "image",
+    mediaType: "video",
     duration: 5,
     visualPrompt: "",
-    generator: "image-gen",
+    generator: "jimeng-cli",
+    configKey: "",
+    materialConfigKey: "",
+    storyboardConfigKey: "",
+    videoConfigKey: "",
     inputAssetRefs: [],
     materialPrompt: "",
     materialAssetRefs: [],
@@ -130,10 +130,12 @@ function emptyShot() {
     materialError: "",
     storyboardPrompt: "",
     storyboardUrl: "",
+    storyboardUrls: [],
     storyboardStatus: "idle",
     storyboardTaskId: "",
     storyboardError: "",
     mediaUrl: "",
+    mediaUrls: [],
     notes: "",
     generationStatus: "idle",
     generationTaskId: "",
@@ -146,16 +148,6 @@ function formatDuration(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function generationLabel(shot) {
-  return {
-    idle: "未生成",
-    pending: "等待处理",
-    processing: "生成中",
-    ready: "已完成",
-    failed: shot.generationError || "生成失败"
-  }[shot.generationStatus] || "未生成";
-}
-
 function statusLabel(status, error = "") {
   return {
     idle: "未生成",
@@ -166,27 +158,11 @@ function statusLabel(status, error = "") {
   }[status] || "未生成";
 }
 
-function generationButtonLabel(shot) {
-  if (shot.generationStatus === "pending") return "取消队列";
-  if (shot.generationStatus === "processing") return "生成中";
-  if (!shot.visualPrompt.trim() && !["pending", "processing"].includes(shot.generationStatus)) {
-    return "填写画面描述";
-  }
-  if (shot.generationStatus === "ready" || shot.generationStatus === "failed") return "重新生成";
-  return shot.mediaType === "video" ? "生成视频" : "生成图片";
-}
-
 function canQueueStage(shot, stage) {
   if (!shot.visualPrompt.trim()) return false;
   if (stage === "materials") return !["pending", "processing", "ready"].includes(shot.materialStatus);
-  if (stage === "storyboard") {
-    return (shot.inputAssetRefs?.length > 0 || shot.materialAssetRefs?.length > 0) &&
-      !["pending", "processing", "ready"].includes(shot.storyboardStatus);
-  }
-  return (
-    Boolean(shot.storyboardUrl) &&
-    !["pending", "processing", "ready"].includes(shot.videoStatus || shot.generationStatus)
-  );
+  if (stage === "storyboard") return !["pending", "processing", "ready"].includes(shot.storyboardStatus);
+  return !["pending", "processing", "ready"].includes(shot.videoStatus || shot.generationStatus);
 }
 
 function updateBatchButton() {
@@ -351,7 +327,7 @@ function route() {
   return projectId ? showStoryboardView(projectId) : showProjectsView();
 }
 
-function renderPreview(shot, index) {
+function renderStagePreview({ url, stage, shot, index, assetId = "", deletable = true }) {
   const frame = document.createElement("div");
   frame.className = "preview-frame";
   frame.style.aspectRatio = project.aspectRatio.replace(":", " / ");
@@ -363,59 +339,126 @@ function renderPreview(shot, index) {
   preview.className = "preview";
   frame.append(preview);
 
-  if (!shot.mediaUrl && shot.storyboardUrl) {
-    const image = document.createElement("img");
-    image.src = shot.storyboardUrl;
-    image.alt = shot.visualPrompt || `镜头 ${index + 1} 故事板图`;
-    preview.append(image);
-    const label = document.createElement("span");
-    label.className = "media-kind";
-    label.textContent = "STORY";
-    preview.append(label);
-    preview.disabled = true;
-    return frame;
-  }
-
-  if (!shot.mediaUrl) {
+  if (!url) {
     const empty = document.createElement("span");
     empty.className = "empty-preview";
-    empty.textContent = shot.storyboardUrl ? "故事板图已完成" : "等待最终视频";
+    empty.textContent = {
+      materials: "未生成物料图",
+      storyboard: "未生成故事板",
+      video: "未生成视频"
+    }[stage];
     preview.append(empty);
     preview.disabled = true;
     return frame;
   }
 
-  const media = shot.mediaType === "video"
+  const media = stage === "video"
     ? Object.assign(document.createElement("video"), { muted: true, preload: "metadata" })
     : document.createElement("img");
-  media.src = shot.mediaUrl;
-  media.alt = shot.visualPrompt || `镜头 ${index + 1} 素材`;
+  media.src = url;
+  media.alt = shot.visualPrompt || `镜头 ${index + 1}`;
   preview.append(media);
 
   const label = document.createElement("span");
   label.className = "media-kind";
-  label.textContent = shot.mediaType === "video" ? "VIDEO" : "IMAGE";
+  label.textContent = { materials: "MAT", storyboard: "STORY", video: "VIDEO" }[stage];
   preview.append(label);
-  preview.addEventListener("click", () => openLightbox(shot, index));
+  preview.addEventListener("click", () => openLightbox(shot, index, stage, url));
 
-  if (shot.generationStatus !== "processing") {
+  if (deletable && !["processing"].includes(stageInfo(shot, stage).status)) {
     const removeButton = document.createElement("button");
     removeButton.type = "button";
     removeButton.className = "remove-media";
-    removeButton.setAttribute("aria-label", "删除素材");
-    removeButton.title = "删除素材";
+    removeButton.setAttribute("aria-label", "删除产物");
+    removeButton.title = "删除产物";
     removeButton.textContent = "×";
     removeButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      deleteMedia(shot);
+      deleteStageMedia(shot, stage, assetId || url);
     });
     frame.append(removeButton);
   }
   return frame;
 }
 
-function chooseUpload(shotId) {
+function renderMaterialOutputs(container, shot, index) {
+  const refs = Array.isArray(shot.materialAssetRefs) ? shot.materialAssetRefs : [];
+  const list = document.createElement("div");
+  list.className = "stage-output-list";
+  if (refs.length > 1) list.classList.add("is-gallery");
+  if (refs.length === 0) {
+    list.append(renderStagePreview({ stage: "materials", shot, index }));
+  }
+  refs.forEach((assetId) => {
+    const asset = assetById(assetId);
+    if (!asset) return;
+    list.append(renderStagePreview({ url: asset.url, stage: "materials", shot, index, assetId }));
+  });
+  container.append(list);
+}
+
+function stageUrls(shot, stage) {
+  if (stage === "storyboard") return [...new Set([shot.storyboardUrl, ...(shot.storyboardUrls || [])].filter(Boolean))];
+  if (stage === "video") return [...new Set([shot.mediaUrl, ...(shot.mediaUrls || [])].filter(Boolean))];
+  return [];
+}
+
+function renderMediaOutputs(container, shot, index, stage) {
+  const list = document.createElement("div");
+  list.className = "stage-output-list";
+  const asset = stage === "storyboard" ? storyboardAsset(shot) : null;
+  const urls = stageUrls(shot, stage);
+  const outputCount = urls.length + (asset?.url && !shot.storyboardUrl ? 1 : 0);
+  if (outputCount > 1) list.classList.add("is-gallery");
+  if (asset?.url && !shot.storyboardUrl) {
+    list.append(renderStagePreview({
+      url: asset.url,
+      stage,
+      shot,
+      index,
+      assetId: asset.id,
+      deletable: true
+    }));
+  }
+  if (urls.length === 0 && !asset?.url) {
+    list.append(renderStagePreview({ stage, shot, index }));
+  }
+  urls.forEach((url) => {
+    list.append(renderStagePreview({ url, stage, shot, index }));
+  });
+  container.append(list);
+}
+
+function renderStageProduct(container, shot, index, stage) {
+  container.replaceChildren();
+  const meta = stageConfigMeta(stage);
+  const configWrap = document.createElement("div");
+  configWrap.className = "stage-config-cell";
+  renderNativeConfigSelect(configWrap, shot[meta.shotField] || "", (nextValue) => {
+    shot[meta.shotField] = nextValue;
+    queueSave();
+  }, { includeProjectDefault: true, label: `${stageInfo(shot, stage).label}模型配置`, mediaType: meta.mediaType });
+
+  const previewWrap = document.createElement("div");
+  previewWrap.className = "preview-slot";
+  if (stage === "materials") {
+    renderMaterialOutputs(previewWrap, shot, index);
+  } else {
+    renderMediaOutputs(previewWrap, shot, index, stage);
+  }
+
+  const controls = document.createElement("div");
+  controls.className = "generation-controls";
+  renderStageControls(controls, shot, stage);
+  container.append(configWrap, previewWrap, controls);
+}
+
+function chooseUpload(shotId, stage = "video") {
   uploadShotId = shotId;
+  uploadStage = stage;
+  mediaUpload.accept = stage === "video"
+    ? "video/mp4,video/webm,video/quicktime"
+    : "image/png,image/jpeg,image/webp,image/gif";
   mediaUpload.value = "";
   mediaUpload.click();
 }
@@ -427,30 +470,33 @@ async function uploadMedia(file) {
   saveStatus.textContent = "上传中…";
   try {
     project = await api(
-      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(uploadShotId)}/media`,
+      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(uploadShotId)}/${uploadStage}`,
       { method: "POST", body: form }
     );
     closeLightbox();
     renderStoryboard();
     saveStatus.textContent = "已保存";
-    showToast("素材已上传");
+    showToast("产物已上传");
   } catch (error) {
     saveStatus.textContent = "上传失败";
     showToast(error.message, "error");
   }
 }
 
-async function deleteMedia(shot) {
-  saveStatus.textContent = "删除素材…";
+async function deleteStageMedia(shot, stage = "video", assetId = "") {
+  saveStatus.textContent = "删除产物…";
   try {
+    const suffix = assetId
+      ? `${stage}/${encodeURIComponent(assetId)}`
+      : stage;
     project = await api(
-      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/media`,
+      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shot.id)}/${suffix}`,
       { method: "DELETE" }
     );
     closeLightbox();
     renderStoryboard();
     saveStatus.textContent = "已保存";
-    showToast("素材已删除");
+    showToast("产物已删除");
   } catch (error) {
     saveStatus.textContent = "删除失败";
     showToast(error.message, "error");
@@ -459,6 +505,10 @@ async function deleteMedia(shot) {
 
 function assetById(assetId) {
   return assetLibrary.find((asset) => asset.id === assetId);
+}
+
+function storyboardAsset(shot) {
+  return shot.storyboardAssetRef ? assetById(shot.storyboardAssetRef) : null;
 }
 
 function renderAssetThumb(asset) {
@@ -546,7 +596,7 @@ async function uploadAsset(file) {
       }
     }
     renderStoryboard();
-    renderSettingsDialog();
+    renderAssetLibraryDialog();
     showToast("物料已添加");
   } catch (error) {
     showToast(error.message, "error");
@@ -555,17 +605,19 @@ async function uploadAsset(file) {
   }
 }
 
-function openLightbox(shot, index) {
+function openLightbox(shot, index, stage = "video", url = "") {
   lightboxShotId = shot.id;
+  lightboxStageName = stage;
   lightboxStage.replaceChildren();
-  const media = shot.mediaType === "video"
+  const mediaUrl = url || (stage === "storyboard" ? shot.storyboardUrl : shot.mediaUrl);
+  const media = stage === "video"
     ? Object.assign(document.createElement("video"), { controls: true, autoplay: true })
     : document.createElement("img");
-  media.src = shot.mediaUrl;
-  media.alt = shot.visualPrompt || `镜头 ${index + 1} 素材`;
+  media.src = mediaUrl;
+  media.alt = shot.visualPrompt || `镜头 ${index + 1}`;
   lightboxStage.append(media);
   document.querySelector("#lightbox-caption").textContent =
-    `镜头 ${String(index + 1).padStart(2, "0")} · ${shot.mediaType === "video" ? "视频" : "图片"}`;
+    `镜头 ${String(index + 1).padStart(2, "0")} · ${stageInfo(shot, stage).label}`;
   lightbox.hidden = false;
   document.body.classList.add("lightbox-open");
   document.querySelector("#lightbox-close").focus();
@@ -577,11 +629,52 @@ function closeLightbox() {
   lightbox.hidden = true;
   lightboxStage.replaceChildren();
   lightboxShotId = "";
+  lightboxStageName = "video";
   document.body.classList.remove("lightbox-open");
 }
 
 function selectLabel(field, value) {
   return selectOptions[field].find((option) => option.value === value)?.label || value;
+}
+
+function configOptions({ includeProjectDefault = false, mediaType = "" } = {}) {
+  const options = (settings?.modelConfigs || [])
+    .filter((config) => !mediaType || config.mediaType === mediaType)
+    .map((config) => ({
+    value: config.key,
+    label: `${config.key} · ${config.name}`
+  }));
+  return includeProjectDefault
+    ? [{ value: "", label: "使用项目默认" }, ...options]
+    : options;
+}
+
+function stageConfigMeta(stage) {
+  if (stage === "materials") {
+    return {
+      projectField: "materialConfigKey",
+      shotField: "materialConfigKey",
+      selectId: "material-config-select",
+      mediaType: "image",
+      fallback: settings?.defaultImageConfigKey || settings?.defaultConfigKey || ""
+    };
+  }
+  if (stage === "storyboard") {
+    return {
+      projectField: "storyboardConfigKey",
+      shotField: "storyboardConfigKey",
+      selectId: "storyboard-config-select",
+      mediaType: "image",
+      fallback: settings?.defaultImageConfigKey || settings?.defaultConfigKey || ""
+    };
+  }
+  return {
+    projectField: "videoConfigKey",
+    shotField: "videoConfigKey",
+    selectId: "video-config-select",
+    mediaType: "video",
+    fallback: settings?.defaultVideoConfigKey || ""
+  };
 }
 
 function closeSelect({ restoreFocus = false } = {}) {
@@ -611,9 +704,7 @@ function openSelect(trigger, field, shot, onChange) {
   menu.className = "select-menu";
   menu.setAttribute("role", "listbox");
   menu.setAttribute("aria-label", trigger.getAttribute("aria-label"));
-  const options = field === "generator" && shot.mediaType === "video"
-    ? selectOptions.generator.filter((option) => option.value === "jimeng-cli")
-    : selectOptions[field];
+  const options = selectOptions[field] || [];
 
   options.forEach((option, index) => {
     const button = document.createElement("button");
@@ -662,9 +753,7 @@ function renderSelect(container, field, shot, onChange) {
   trigger.setAttribute("aria-haspopup", "listbox");
   trigger.setAttribute("aria-expanded", "false");
   trigger.setAttribute("aria-label", {
-    rollType: "镜头类型",
-    mediaType: "媒体类型",
-    generator: "生成方式"
+    rollType: "镜头类型"
   }[field]);
   const value = document.createElement("span");
   value.className = `select-value ${
@@ -693,6 +782,40 @@ function updateSummary() {
   durationTotal.textContent = formatDuration(
     project.shots.reduce((sum, shot) => sum + Number(shot.duration || 0), 0)
   );
+}
+
+function renderProjectConfigSelects() {
+  ["materials", "storyboard", "video"].forEach((stage) => {
+    const meta = stageConfigMeta(stage);
+    const select = document.querySelector(`#${meta.selectId}`);
+    select.replaceChildren();
+    configOptions({ mediaType: meta.mediaType }).forEach((option) => {
+      const item = document.createElement("option");
+      item.value = option.value;
+      item.textContent = option.label;
+      select.append(item);
+    });
+    select.value = project[meta.projectField] || meta.fallback;
+    select.disabled = select.options.length === 0;
+  });
+}
+
+function renderNativeConfigSelect(container, value, onChange, options = {}) {
+  const select = document.createElement("select");
+  select.className = "row-config-select";
+  select.setAttribute("aria-label", options.label || "模型配置");
+  configOptions({
+    includeProjectDefault: options.includeProjectDefault,
+    mediaType: options.mediaType
+  }).forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    select.append(item);
+  });
+  select.value = value || "";
+  select.addEventListener("change", () => onChange(select.value));
+  container.replaceChildren(select);
 }
 
 function queueSave() {
@@ -732,6 +855,7 @@ function renderStoryboard() {
   document.title = `${project.title} · Codex 分镜台`;
   document.querySelector("#project-title").textContent = project.title;
   document.querySelector("#project-ratio").textContent = project.aspectRatio;
+  renderProjectConfigSelects();
   renderDesignState();
   document.documentElement.style.setProperty("--preview-ratio", project.aspectRatio.replace(":", " / "));
   body.replaceChildren();
@@ -749,7 +873,9 @@ function renderStoryboard() {
         updateSummary();
         if (field === "visualPrompt") {
           updateBatchButton();
-          renderPipelineControls(row.querySelector(".generation-controls"), shot);
+          row.querySelectorAll(".stage-product").forEach((container) => {
+            renderStageProduct(container, shot, index, container.dataset.stage);
+          });
         }
         queueSave();
       });
@@ -758,19 +884,13 @@ function renderStoryboard() {
     row.querySelectorAll("[data-select-field]").forEach((container) => {
       const field = container.dataset.selectField;
       renderSelect(container, field, shot, (changedField) => {
-        if (changedField === "mediaType") {
-          shot.generator = shot.mediaType === "video" ? "jimeng-cli" : "image-gen";
-          renderStoryboard();
-        }
-        if (changedField === "generator") renderStoryboard();
         queueSave();
       });
     });
 
-    if (shot.mediaType === "video" && shot.generator !== "jimeng-cli") shot.generator = "jimeng-cli";
-    renderAssetRefs(row.querySelector(".asset-ref-cell"), shot);
-    row.querySelector(".preview-slot").append(renderPreview(shot, index));
-    renderPipelineControls(row.querySelector(".generation-controls"), shot);
+    row.querySelectorAll(".stage-product").forEach((container) => {
+      renderStageProduct(container, shot, index, container.dataset.stage);
+    });
 
     row.querySelector(".delete-shot").addEventListener("click", async () => {
       await api(
@@ -802,18 +922,173 @@ function renderDesignState() {
     : "导入 DESIGN.md";
 }
 
-function renderSettingsDialog() {
-  if (!settings) return;
-  document.querySelector("#setting-image-model").value = settings.jimeng.imageModel;
-  document.querySelector("#setting-video-model").value = settings.jimeng.videoModel;
-  document.querySelector("#setting-image-resolution").value = settings.jimeng.imageResolution;
-  document.querySelector("#setting-video-resolution").value = settings.jimeng.videoResolution;
-  document.querySelector("#setting-queue").value = settings.jimeng.queue || "";
-  document.querySelector("#setting-poll").value = settings.jimeng.pollSeconds;
-  document.querySelector("#setting-session").value = settings.jimeng.sessionStrategy;
-  document.querySelector("#setting-fixed-prefix").value = settings.promptTemplates.fixedPrefix;
-  document.querySelector("#setting-reference-template").value = settings.promptTemplates.referenceTemplate;
+function createBlankConfig(index, mediaType = "image") {
+  return {
+    key: `config${index}`,
+    name: `配置 ${index}`,
+    mediaType,
+    provider: mediaType === "video" ? "jimeng-cli" : "image-gen",
+    prompt: "",
+    referenceTemplate: "",
+    jimeng: {
+      imageModel: "seedream 4.7",
+      videoModel: "seedance 2.0 mini",
+      imageResolution: "2k",
+      videoResolution: "720p",
+      pollSeconds: 30,
+    }
+  };
+}
 
+function escapeAttribute(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function renderModelConfigDialog() {
+  if (!settings) return;
+  const defaultImageSelect = document.querySelector("#default-image-config-key");
+  const defaultVideoSelect = document.querySelector("#default-video-config-key");
+  defaultImageSelect.replaceChildren();
+  defaultVideoSelect.replaceChildren();
+  (settings.modelConfigs || []).filter((config) => config.mediaType === "image").forEach((config) => {
+    const option = document.createElement("option");
+    option.value = config.key;
+    option.textContent = `${config.key} · ${config.name}`;
+    defaultImageSelect.append(option);
+  });
+  (settings.modelConfigs || []).filter((config) => config.mediaType === "video").forEach((config) => {
+    const option = document.createElement("option");
+    option.value = config.key;
+    option.textContent = `${config.key} · ${config.name}`;
+    defaultVideoSelect.append(option);
+  });
+  defaultImageSelect.value = settings.defaultImageConfigKey || settings.defaultConfigKey || "";
+  defaultVideoSelect.value = settings.defaultVideoConfigKey || "";
+
+  const imageList = document.querySelector("#image-config-list");
+  const videoList = document.querySelector("#video-config-list");
+  imageList.replaceChildren();
+  videoList.replaceChildren();
+  (settings.modelConfigs || []).forEach((config) => {
+    const card = document.createElement("article");
+    card.className = "model-config-card";
+    card.dataset.key = config.key;
+    card.dataset.mediaType = config.mediaType || "image";
+    const isVideo = config.mediaType === "video";
+    card.innerHTML = `
+      <div class="settings-grid">
+        <label class="form-field"><span>Key</span><input data-config-field="key" value="${escapeAttribute(config.key)}" /></label>
+        <label class="form-field"><span>名称</span><input data-config-field="name" value="${escapeAttribute(config.name)}" /></label>
+        <label class="form-field"><span>类型</span><input data-config-field="mediaType" value="${isVideo ? "视频" : "图片"}" disabled /></label>
+        <label class="form-field"><span>提供方</span><select data-config-field="provider" ${isVideo ? "disabled" : ""}><option value="image-gen">Image Generation</option><option value="jimeng-cli">即梦 CLI</option></select></label>
+        <label class="form-field jimeng-image-field"><span>图片模型</span><input data-config-field="imageModel" value="${escapeAttribute(config.jimeng?.imageModel || "")}" /></label>
+        <label class="form-field jimeng-image-field"><span>图片分辨率</span><input data-config-field="imageResolution" value="${escapeAttribute(config.jimeng?.imageResolution || "")}" /></label>
+        <label class="form-field jimeng-video-field"><span>视频模型</span><input data-config-field="videoModel" value="${escapeAttribute(config.jimeng?.videoModel || "")}" /></label>
+        <label class="form-field jimeng-video-field"><span>视频分辨率</span><input data-config-field="videoResolution" value="${escapeAttribute(config.jimeng?.videoResolution || "")}" /></label>
+        <label class="form-field jimeng-field"><span>Poll 秒数</span><input data-config-field="pollSeconds" type="number" min="0" step="1" value="${escapeAttribute(config.jimeng?.pollSeconds || 30)}" /></label>
+      </div>
+      <label class="form-field"><span>prompt 前缀</span><textarea data-config-field="prompt" class="compact-textarea"></textarea></label>
+      <label class="form-field"><span>prompt 模板</span><textarea data-config-field="referenceTemplate" class="compact-textarea"></textarea></label>
+      <div class="panel-heading"><span></span><button class="delete-config secondary compact-button" type="button">删除配置</button></div>
+    `;
+    card.querySelector('[data-config-field="provider"]').value = config.provider || "image-gen";
+    card.querySelector('[data-config-field="prompt"]').value = config.prompt || "";
+    card.querySelector('[data-config-field="referenceTemplate"]').value = config.referenceTemplate || "";
+    updateConfigCardVisibility(card);
+    card.querySelector('[data-config-field="provider"]').addEventListener("change", () => updateConfigCardVisibility(card));
+    card.querySelector(".delete-config").disabled = settings.modelConfigs.length <= 1;
+    card.querySelector(".delete-config").addEventListener("click", () => {
+      const currentKey = card.querySelector('[data-config-field="key"]')?.value || config.key;
+      syncSettingsFromDialog();
+      settings.modelConfigs = settings.modelConfigs.filter((item) => item.key !== currentKey);
+      if (!settings.modelConfigs.some((item) => item.key === settings.defaultImageConfigKey)) {
+        settings.defaultImageConfigKey = settings.modelConfigs.find((item) => item.mediaType === "image")?.key || "";
+      }
+      if (!settings.modelConfigs.some((item) => item.key === settings.defaultVideoConfigKey)) {
+        settings.defaultVideoConfigKey = settings.modelConfigs.find((item) => item.mediaType === "video")?.key || "";
+      }
+      renderModelConfigDialog();
+    });
+    (isVideo ? videoList : imageList).append(card);
+  });
+}
+
+function updateConfigCardVisibility(card) {
+  const mediaType = card.dataset.mediaType || "image";
+  const provider = card.querySelector('[data-config-field="provider"]')?.value || "image-gen";
+  card.querySelectorAll(".jimeng-image-field").forEach((field) => {
+    field.hidden = mediaType !== "image" || provider !== "jimeng-cli";
+  });
+  card.querySelectorAll(".jimeng-video-field").forEach((field) => {
+    field.hidden = mediaType !== "video";
+  });
+  card.querySelectorAll(".jimeng-field").forEach((field) => {
+    field.hidden = mediaType === "image" && provider !== "jimeng-cli";
+  });
+}
+
+function readModelConfigsFromDialog() {
+  return [...document.querySelectorAll(".model-config-card")].map((card, index) => {
+    const value = (field) => card.querySelector(`[data-config-field="${field}"]`)?.value || "";
+    const mediaType = card.dataset.mediaType === "video" ? "video" : "image";
+    const provider = mediaType === "video"
+      ? "jimeng-cli"
+      : (value("provider") === "jimeng-cli" ? "jimeng-cli" : "image-gen");
+    const jimeng = {};
+    if (mediaType === "image" && provider === "jimeng-cli") {
+      jimeng.imageModel = value("imageModel");
+      jimeng.imageResolution = value("imageResolution");
+      jimeng.pollSeconds = Number(value("pollSeconds"));
+    }
+    if (mediaType === "video") {
+      jimeng.videoModel = value("videoModel");
+      jimeng.videoResolution = value("videoResolution");
+      jimeng.pollSeconds = Number(value("pollSeconds"));
+    }
+    return {
+      key: value("key") || `config${index + 1}`,
+      name: value("name") || value("key") || `配置 ${index + 1}`,
+      mediaType,
+      provider,
+      prompt: value("prompt"),
+      referenceTemplate: value("referenceTemplate"),
+      jimeng
+    };
+  });
+}
+
+function syncSettingsFromDialog() {
+  if (!settingsDialog.open || !settings) return;
+  settings.modelConfigs = readModelConfigsFromDialog();
+  settings.defaultConfigKey = document.querySelector("#default-image-config-key").value;
+  settings.defaultImageConfigKey = settings.defaultConfigKey;
+  settings.defaultVideoConfigKey = document.querySelector("#default-video-config-key").value;
+}
+
+function nextConfigIndex() {
+  const used = new Set((settings.modelConfigs || []).map((config) => config.key));
+  let index = (settings.modelConfigs || []).length + 1;
+  while (used.has(`config${index}`)) index += 1;
+  return index;
+}
+
+function addModelConfig(mediaType) {
+  syncSettingsFromDialog();
+  const nextConfig = createBlankConfig(nextConfigIndex(), mediaType);
+  settings.modelConfigs.push(nextConfig);
+  renderModelConfigDialog();
+  const target = document.querySelector(
+    `${mediaType === "video" ? "#video-config-list" : "#image-config-list"} [data-key="${CSS.escape(nextConfig.key)}"]`
+  );
+  target?.scrollIntoView({ behavior: "smooth", block: "end" });
+  target?.querySelector('[data-config-field="name"]')?.focus({ preventScroll: true });
+}
+
+function renderAssetLibraryDialog() {
   const list = document.querySelector("#asset-library-list");
   list.replaceChildren();
   if (assetLibrary.length === 0) {
@@ -853,28 +1128,28 @@ function renderSettingsDialog() {
 
 async function openSettingsDialog() {
   await loadSettingsAndAssets();
-  renderSettingsDialog();
+  renderModelConfigDialog();
   settingsDialog.showModal();
 }
 
+async function openAssetLibraryDialog() {
+  await loadSettingsAndAssets();
+  renderAssetLibraryDialog();
+  assetLibraryDialog.showModal();
+}
+
 async function saveSettingsFromDialog() {
+  const configs = readModelConfigsFromDialog();
   const next = {
-    jimeng: {
-      imageModel: document.querySelector("#setting-image-model").value,
-      videoModel: document.querySelector("#setting-video-model").value,
-      imageResolution: document.querySelector("#setting-image-resolution").value,
-      videoResolution: document.querySelector("#setting-video-resolution").value,
-      queue: document.querySelector("#setting-queue").value,
-      pollSeconds: Number(document.querySelector("#setting-poll").value),
-      sessionStrategy: document.querySelector("#setting-session").value
-    },
-    promptTemplates: {
-      fixedPrefix: document.querySelector("#setting-fixed-prefix").value,
-      referenceTemplate: document.querySelector("#setting-reference-template").value
-    }
+    presetsVersion: settings.presetsVersion,
+    defaultConfigKey: document.querySelector("#default-image-config-key").value,
+    defaultImageConfigKey: document.querySelector("#default-image-config-key").value,
+    defaultVideoConfigKey: document.querySelector("#default-video-config-key").value,
+    modelConfigs: configs
   };
   settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(next) });
-  renderSettingsDialog();
+  renderModelConfigDialog();
+  renderStoryboard();
   showToast("配置已保存");
 }
 
@@ -891,30 +1166,37 @@ async function deleteAsset(assetId) {
   const result = await api(`/api/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
   assetLibrary = result.assets || [];
   if (project) project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
-  renderSettingsDialog();
+  renderAssetLibraryDialog();
   renderStoryboard();
   showToast("物料已删除");
 }
 
-function openAssetPicker(shotId) {
+function openAssetPicker(shotId, stage = "materials") {
   assetPickerShotId = shotId;
+  assetPickerStage = stage;
   const shot = project.shots.find((item) => item.id === shotId);
-  const selected = new Set(shot?.inputAssetRefs || []);
+  const selected = new Set(stage === "storyboard"
+    ? [shot?.storyboardAssetRef].filter(Boolean)
+    : (stage === "materials" ? shot?.materialAssetRefs || [] : shot?.inputAssetRefs || []));
   const list = document.querySelector("#asset-picker-list");
   list.replaceChildren();
-  if (assetLibrary.length === 0) {
+  document.querySelector("#asset-picker-title").textContent =
+    stage === "storyboard" ? "选择故事板图" : "选择物料图";
+  const candidates = assetLibrary.filter((asset) => asset.type === "image");
+  if (candidates.length === 0) {
     const empty = document.createElement("p");
     empty.className = "delete-message";
-    empty.textContent = "物料库为空，请先新增物料。";
+    empty.textContent = "物料库中暂无图片物料。";
     list.append(empty);
   }
-  assetLibrary.forEach((asset) => {
+  candidates.forEach((asset) => {
     const label = document.createElement("label");
     label.className = "asset-picker-option";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = asset.id;
-    checkbox.checked = selected.has(asset.id);
+    const input = document.createElement("input");
+    input.type = stage === "storyboard" ? "radio" : "checkbox";
+    input.name = "asset-picker-selection";
+    input.value = asset.id;
+    input.checked = selected.has(asset.id);
     const meta = document.createElement("span");
     meta.className = "asset-meta";
     const name = document.createElement("strong");
@@ -922,7 +1204,7 @@ function openAssetPicker(shotId) {
     const detail = document.createElement("span");
     detail.textContent = [asset.personName, ...(asset.tags || [])].filter(Boolean).join(" · ") || asset.type;
     meta.append(name, detail);
-    label.append(checkbox, renderAssetThumb(asset), meta);
+    label.append(input, renderAssetThumb(asset), meta);
     list.append(label);
   });
   assetPickerDialog.showModal();
@@ -931,10 +1213,32 @@ function openAssetPicker(shotId) {
 function applyAssetPicker() {
   const shot = project.shots.find((item) => item.id === assetPickerShotId);
   if (!shot) return;
-  shot.inputAssetRefs = [...document.querySelectorAll("#asset-picker-list input:checked")]
+  const selected = [...document.querySelectorAll("#asset-picker-list input:checked")]
     .map((input) => input.value);
+  if (assetPickerStage === "storyboard") {
+    shot.storyboardAssetRef = selected[0] || "";
+    if (shot.storyboardAssetRef) {
+      shot.storyboardUrl = "";
+      shot.storyboardUrls = [];
+      shot.storyboardStatus = "ready";
+      shot.storyboardTaskId = "";
+      shot.storyboardError = "";
+      shot.storyboardCompletedAt = new Date().toISOString();
+    } else if (!shot.storyboardUrl) {
+      shot.storyboardStatus = "idle";
+    }
+  } else if (assetPickerStage === "materials") {
+    shot.materialAssetRefs = selected;
+    shot.materialStatus = selected.length > 0 ? "ready" : "idle";
+    shot.materialTaskId = "";
+    shot.materialError = "";
+    shot.materialCompletedAt = selected.length > 0 ? new Date().toISOString() : null;
+  } else {
+    shot.inputAssetRefs = selected;
+  }
   assetPickerDialog.close();
   assetPickerShotId = "";
+  assetPickerStage = "materials";
   renderStoryboard();
   queueSave();
 }
@@ -975,43 +1279,50 @@ function stageButtonLabel(shot, stage) {
   return info.action;
 }
 
-function renderPipelineControls(container, shot) {
+function renderStageControls(container, shot, stage) {
   container.replaceChildren();
-  ["materials", "storyboard", "video"].forEach((stage) => {
-    const info = stageInfo(shot, stage);
-    const row = document.createElement("div");
-    row.className = "pipeline-stage";
-    row.dataset.stage = stage;
+  const info = stageInfo(shot, stage);
+  const row = document.createElement("div");
+  row.className = "pipeline-stage";
+  row.dataset.stage = stage;
 
-    const status = document.createElement("span");
-    status.className = "generation-status";
-    status.dataset.status = info.status;
-    status.title = info.error;
-    status.textContent = `${info.label}：${statusLabel(info.status, info.error)}`;
+  const status = document.createElement("span");
+  status.className = "generation-status";
+  status.dataset.status = info.status;
+  status.title = info.error;
+  status.textContent = statusLabel(info.status, info.error);
 
-    const button = document.createElement("button");
-    button.className = "generate-shot";
-    button.type = "button";
-    button.textContent = stageButtonLabel(shot, stage);
-    button.dataset.action = info.status === "pending" ? "cancel" : "generate";
-    button.disabled =
-      info.status === "processing" ||
-      !shot.visualPrompt.trim() ||
-      (stage === "storyboard" && !(shot.inputAssetRefs?.length || shot.materialAssetRefs?.length)) ||
-      (stage === "video" && !shot.storyboardUrl);
-    button.addEventListener("click", () => {
-      if (info.status === "pending") return cancelGeneration({ generationTaskId: info.taskId });
-      if (stage === "video") return confirmVideoGeneration(shot);
-      return queueGeneration(
-        [shot.id],
-        info.status === "ready" || info.status === "failed",
-        { stage }
-      );
-    });
+  const upload = document.createElement("button");
+  upload.className = "generate-shot";
+  upload.type = "button";
+  upload.textContent = "上传";
+  upload.addEventListener("click", () => chooseUpload(shot.id, stage));
 
-    row.append(status, button);
-    container.append(row);
+  const pick = document.createElement("button");
+  pick.className = "generate-shot";
+  pick.type = "button";
+  pick.textContent = "物料库";
+  pick.hidden = stage === "video";
+  pick.addEventListener("click", () => openAssetPicker(shot.id, stage));
+
+  const button = document.createElement("button");
+  button.className = "generate-shot";
+  button.type = "button";
+  button.textContent = stageButtonLabel(shot, stage);
+  button.dataset.action = info.status === "pending" ? "cancel" : "generate";
+  button.disabled = info.status === "processing" || !shot.visualPrompt.trim();
+  button.addEventListener("click", () => {
+    if (info.status === "pending") return cancelGeneration({ generationTaskId: info.taskId });
+    if (stage === "video") return confirmVideoGeneration(shot);
+    return queueGeneration(
+      [shot.id],
+      info.status === "ready" || info.status === "failed",
+      { stage }
+    );
   });
+
+  row.append(status, upload, pick, button);
+  container.append(row);
 }
 
 function openDesignMenu() {
@@ -1108,7 +1419,7 @@ async function cancelGeneration(shot) {
 function confirmVideoGeneration(shot) {
   videoConfirmShotId = shot.id;
   document.querySelector("#video-confirm-message").textContent =
-    `即将提交镜头 ${project.shots.indexOf(shot) + 1} 的视频生成任务。会同时引用物料图和故事板图，视频任务会消耗额度，且每次只能提交一个。`;
+    `即将提交镜头 ${project.shots.indexOf(shot) + 1} 的视频生成任务。已有物料图和故事板图会自动作为输入，视频任务会消耗额度，且每次只能提交一个。`;
   videoConfirmDialog.showModal();
 }
 
@@ -1172,9 +1483,24 @@ themeButtons.forEach((button) => button.addEventListener("click", toggleTheme));
 document.querySelector("#create-project").addEventListener("click", () => openProjectDialog("create"));
 document.querySelector("#brand-home").addEventListener("click", () => navigate("/"));
 document.querySelector("#back-home").addEventListener("click", () => navigate("/"));
-document.querySelector("#open-settings").addEventListener("click", openSettingsDialog);
+document.querySelector("#open-model-configs").addEventListener("click", openSettingsDialog);
+document.querySelector("#open-asset-library").addEventListener("click", openAssetLibraryDialog);
 document.querySelector("#add-shot-top").addEventListener("click", addShot);
 document.querySelector("#add-shot-bottom").addEventListener("click", addShot);
+["materials", "storyboard", "video"].forEach((stage) => {
+  const meta = stageConfigMeta(stage);
+  document.querySelector(`#${meta.selectId}`).addEventListener("change", async (event) => {
+    if (!project) return;
+    project[meta.projectField] = event.target.value;
+    saveStatus.textContent = "保存中…";
+    project = await api(`/api/projects/${encodeURIComponent(project.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ [meta.projectField]: project[meta.projectField] })
+    });
+    renderStoryboard();
+    saveStatus.textContent = "已保存";
+  });
+});
 
 projectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1235,6 +1561,12 @@ mediaUpload.addEventListener("change", () => uploadMedia(mediaUpload.files?.[0])
 assetUpload.addEventListener("change", () => uploadAsset(assetUpload.files?.[0]));
 document.querySelector("#choose-asset-upload").addEventListener("click", () => chooseAssetUpload(""));
 document.querySelector("#save-settings").addEventListener("click", saveSettingsFromDialog);
+document.querySelector("#add-image-config").addEventListener("click", () => {
+  addModelConfig("image");
+});
+document.querySelector("#add-video-config").addEventListener("click", () => {
+  addModelConfig("video");
+});
 document.querySelector("#apply-asset-picker").addEventListener("click", applyAssetPicker);
 document.querySelector("#confirm-video-generation").addEventListener("click", async () => {
   const shot = project.shots.find((item) => item.id === videoConfirmShotId);
@@ -1279,7 +1611,7 @@ designMenuTrigger.addEventListener("click", () => {
 });
 document.querySelector("#lightbox-close").addEventListener("click", closeLightbox);
 document.querySelector("#lightbox-upload").addEventListener("click", () => {
-  if (lightboxShotId) chooseUpload(lightboxShotId);
+  if (lightboxShotId) chooseUpload(lightboxShotId, lightboxStageName);
 });
 lightbox.addEventListener("click", (event) => {
   if (event.target === lightbox || event.target === lightboxStage) closeLightbox();

@@ -17,21 +17,19 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
 
    If a required capability is unavailable, do not claim affected tasks. Report the missing capability and continue with tasks whose generators are available.
 
-3. Process tasks by stage order when multiple stages are pending for the same project: `materials`, then `storyboard`, then `video`.
+3. Prefer stage order when multiple stages are pending for the same project: `materials`, then `storyboard`, then `video`. Stages are not hard dependencies; process a later stage if it is queued even when prior outputs are absent.
 4. Material and storyboard image tasks can be processed in batches from the queue, but process claimed tasks one at a time. Video tasks are queued one at a time by the storyboard UI and must remain single-confirmed.
 5. Before generating, call `claim_storyboard_generation_task`.
 6. If the claimed task has `hasDesign: true`, read the complete Markdown file at the exact absolute `designPath` before generating anything.
-7. Build the prompt from `compiledPrompt`. Treat `promptTemplates.referenceTemplate` as guidance only; do not append it unless it clearly improves the specific generation.
+7. Build the prompt from `compiledPrompt`. The task already resolved the shot/project/global model configuration into `configKey`, `configName`, `compiledPrompt`, and `generatorConfig`. Treat `promptTemplates.referenceTemplate` as guidance only; do not append it unless it clearly improves the specific generation.
 8. Route by `stage`, `generator`, and `mediaType`:
 
    - `materials`: generate missing character or scene reference images described by `compiledPrompt`. Complete with `mediaType: "image"` and provide useful `assetName`, `personName`, `tags`, or `aliases` when obvious; completion adds the output to the material library and references it on the shot.
-   - `storyboard`: generate the key storyboard frame for the shot using `compiledPrompt` and all `inputAssets`. Complete with `mediaType: "image"`; completion stores it as the shot storyboard image.
-   - `video`: always use `dreamina multimodal2video`, regardless of input asset count or type. Pass available material images, audio, storyboard image, `--prompt`, `--model_version`, `--duration`, `--video_resolution`, and `--poll` values from the task. Complete with `mediaType: "video"`; completion stores it as the final shot preview.
+   - `storyboard`: generate the key storyboard frame for the shot using `compiledPrompt` and any available `inputAssets`. Complete with `mediaType: "image"`; completion stores it as the shot storyboard image.
+   - `video`: always use `dreamina multimodal2video`, regardless of input asset count or type. Pass available material images, audio, storyboard image, `--prompt`, `--model_version`, `--duration`, `--video_resolution`, and `--poll` values from the task. Complete with `mediaType: "video"`; completion stores it as the final video output.
    - For non-video `image-gen` tasks, use the built-in image generation tool, honor `aspectRatio`, and use `inputAssets` as image references when the tool supports references.
    - For non-video `jimeng-cli` tasks without image inputs, use `dreamina text2image --prompt=... --ratio=... --resolution_type=... --model_version=... --poll=...`.
    - For non-video `jimeng-cli` tasks with image inputs, use `dreamina image2image --images=a.png,b.png --prompt=... --ratio=... --resolution_type=... --model_version=... --poll=...`.
-
-   If `generatorConfig.queue` is non-empty and the installed Jimeng CLI exposes a queue/channel flag, pass it using the exact flag shown by `dreamina <subcommand> -h`; otherwise include the configured queue value in failure/debug notes.
 
 9. If Jimeng returns a finished local file, verify it and call `complete_storyboard_generation_task`.
 10. If Jimeng returns `querying` with `submit_id`, call `update_storyboard_generation_task` with that `jimengSubmitId`, then later run `dreamina query_result --submit_id=... --download_dir=<outputDir>` and complete the task after the downloaded file is verified.

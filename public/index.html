@@ -82,7 +82,6 @@
             </button>
           </div>
         </div>
-        <select id="project-config-select" class="header-select" aria-label="项目默认模型配置"></select>
         <button id="open-model-configs" class="secondary">模型配置</button>
         <button id="open-asset-library" class="secondary">物料库</button>
         <button id="generate-materials" class="secondary">批量物料图</button>
@@ -110,12 +109,11 @@
         <colgroup>
           <col class="col-index" />
           <col class="col-roll" />
-          <col class="col-media" />
           <col class="col-duration" />
           <col class="col-visual" />
-          <col class="col-input-assets" />
-          <col class="col-generator" />
-          <col class="col-preview" />
+          <col class="col-materials" />
+          <col class="col-storyboard" />
+          <col class="col-video" />
           <col class="col-notes" />
           <col class="col-actions" />
         </colgroup>
@@ -123,12 +121,26 @@
           <tr>
             <th>#</th>
             <th>镜头</th>
-            <th>媒体</th>
             <th>时长</th>
             <th>画面描述 / 生成提示词</th>
-            <th>输入物料</th>
-            <th>生成方式</th>
-            <th>素材预览</th>
+            <th>
+              <div class="stage-header">
+                <span>物料图</span>
+                <select id="material-config-select" class="stage-header-select" aria-label="物料图默认模型配置"></select>
+              </div>
+            </th>
+            <th>
+              <div class="stage-header">
+                <span>故事板</span>
+                <select id="storyboard-config-select" class="stage-header-select" aria-label="故事板默认模型配置"></select>
+              </div>
+            </th>
+            <th>
+              <div class="stage-header">
+                <span>视频</span>
+                <select id="video-config-select" class="stage-header-select" aria-label="视频默认模型配置"></select>
+              </div>
+            </th>
             <th>备注</th>
             <th></th>
           </tr>
@@ -165,7 +177,6 @@
     <tr class="shot-row">
       <td class="index-cell"></td>
       <td><div data-select-field="rollType"></div></td>
-      <td><div data-select-field="mediaType"></div></td>
       <td>
         <div class="duration-input">
           <input data-field="duration" type="number" min="0" step="0.5" />
@@ -173,17 +184,9 @@
         </div>
       </td>
       <td><textarea data-field="visualPrompt" placeholder="描述画面、台词、声音和生成提示词"></textarea></td>
-      <td><div class="asset-ref-cell"></div></td>
-      <td><div data-select-field="generator"></div></td>
-      <td class="preview-cell">
-        <div class="preview-stack">
-          <div class="preview-slot"></div>
-          <div class="generation-controls">
-            <span class="generation-status"></span>
-            <button class="generate-shot" type="button">生成素材</button>
-          </div>
-        </div>
-      </td>
+      <td><div class="stage-product" data-stage="materials"></div></td>
+      <td><div class="stage-product" data-stage="storyboard"></div></td>
+      <td><div class="stage-product" data-stage="video"></div></td>
       <td><textarea data-field="notes" placeholder="补充说明"></textarea></td>
       <td><button class="delete-shot" type="button" aria-label="删除镜头">×</button></td>
     </tr>
@@ -246,15 +249,31 @@
         </div>
         <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
       </div>
-      <div class="panel-heading">
+      <div class="panel-heading settings-toolbar">
         <label class="form-field compact-field">
-          <span>全局默认</span>
-          <select id="default-config-key"></select>
+          <span>图片默认</span>
+          <select id="default-image-config-key"></select>
         </label>
-        <button id="add-model-config" class="secondary compact-button" type="button">新增配置</button>
+        <label class="form-field compact-field">
+          <span>视频默认</span>
+          <select id="default-video-config-key"></select>
+        </label>
+        <div class="settings-actions">
+          <button id="add-image-config" class="secondary compact-button" type="button">新增图片配置</button>
+          <button id="add-video-config" class="secondary compact-button" type="button">新增视频配置</button>
+        </div>
       </div>
-      <div id="model-config-list" class="model-config-list"></div>
-      <div class="dialog-actions">
+      <div class="model-config-columns settings-body">
+        <section class="model-config-section">
+          <div class="model-config-section-title">图片模型配置</div>
+          <div id="image-config-list" class="model-config-list"></div>
+        </section>
+        <section class="model-config-section">
+          <div class="model-config-section-title">视频模型配置</div>
+          <div id="video-config-list" class="model-config-list"></div>
+        </section>
+      </div>
+      <div class="dialog-actions settings-footer">
         <button class="secondary" type="button" data-close-dialog>关闭</button>
         <button id="save-settings" class="primary" type="button">保存配置</button>
       </div>
@@ -288,7 +307,7 @@
       <div class="dialog-heading">
         <div>
           <p class="eyebrow">输入物料</p>
-          <h2>选择引用</h2>
+          <h2 id="asset-picker-title">选择引用</h2>
         </div>
         <button class="dialog-close" type="button" data-close-dialog aria-label="关闭">×</button>
       </div>
@@ -363,7 +382,6 @@
   <input
     id="media-upload"
     type="file"
-    accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
     hidden
   />
   <input

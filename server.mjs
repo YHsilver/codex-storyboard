@@ -79,22 +79,57 @@ const allowedAssetUploads = new Map([
 ]);
 
 const defaultSettings = {
-  defaultConfigKey: "default",
-  modelConfigs: [{
-    key: "default",
-    name: "默认配置",
-    prompt: "",
-    referenceTemplate: "",
-    jimeng: {
-      imageModel: "seedream 4.7",
-      videoModel: "seedance 2.0 mini",
-      imageResolution: "2k",
-      videoResolution: "720p",
-      queue: "",
-      pollSeconds: 30,
-      sessionStrategy: "project"
+  presetsVersion: 1,
+  defaultImageConfigKey: "cf1",
+  defaultVideoConfigKey: "cf4",
+  defaultConfigKey: "cf1",
+  modelConfigs: [
+    {
+      key: "cf1",
+      name: "图片 image gen + prompts",
+      mediaType: "image",
+      provider: "image-gen",
+      prompt: "",
+      referenceTemplate: "",
+      jimeng: {}
+    },
+    {
+      key: "cf2",
+      name: "图片 即梦 2k model1",
+      mediaType: "image",
+      provider: "jimeng-cli",
+      prompt: "",
+      referenceTemplate: "",
+      jimeng: { imageModel: "model1", imageResolution: "2k" }
+    },
+    {
+      key: "cf3",
+      name: "图片 即梦 4k model2",
+      mediaType: "image",
+      provider: "jimeng-cli",
+      prompt: "",
+      referenceTemplate: "",
+      jimeng: { imageModel: "model2", imageResolution: "4k" }
+    },
+    {
+      key: "cf4",
+      name: "视频 即梦 720p seedance2.0",
+      mediaType: "video",
+      provider: "jimeng-cli",
+      prompt: "",
+      referenceTemplate: "",
+      jimeng: { videoModel: "seedance2.0", videoResolution: "720p" }
+    },
+    {
+      key: "cf5",
+      name: "视频 即梦 720p seedance2.0fast_vip",
+      mediaType: "video",
+      provider: "jimeng-cli",
+      prompt: "",
+      referenceTemplate: "",
+      jimeng: { videoModel: "seedance2.0fast_vip", videoResolution: "720p" }
     }
-  }]
+  ]
 };
 
 await mkdir(projectsDir, { recursive: true });
@@ -164,33 +199,48 @@ function uniqueStrings(values) {
     .filter(Boolean))];
 }
 
+function removeString(values, value) {
+  return uniqueStrings(values).filter((item) => item !== value);
+}
+
 function normalizeModelConfig(config = {}, fallback = defaultSettings.modelConfigs[0]) {
+  const mediaType = config.mediaType === "video" || fallback.mediaType === "video" ? "video" : "image";
+  const provider = mediaType === "video"
+    ? "jimeng-cli"
+    : (config.provider === "jimeng-cli" || config.generator === "jimeng-cli" ? "jimeng-cli" : "image-gen");
   const key = String(config.key || fallback.key || createId("config"))
     .trim()
     .replace(/[^a-zA-Z0-9_-]/g, "-") || fallback.key;
-  const pollSeconds = Number(config.jimeng?.pollSeconds ?? fallback.jimeng.pollSeconds);
+  const pollSeconds = Number(config.jimeng?.pollSeconds ?? fallback.jimeng?.pollSeconds ?? 30);
+  const jimeng = {};
+  if (mediaType === "image" && provider === "jimeng-cli") {
+    jimeng.imageModel = String(config.jimeng?.imageModel || fallback.jimeng?.imageModel || "model1");
+    jimeng.imageResolution = String(config.jimeng?.imageResolution || fallback.jimeng?.imageResolution || "2k");
+    jimeng.pollSeconds = Number.isFinite(pollSeconds) && pollSeconds >= 0
+      ? pollSeconds
+      : (fallback.jimeng?.pollSeconds || 30);
+  }
+  if (mediaType === "video") {
+    jimeng.videoModel = String(config.jimeng?.videoModel || fallback.jimeng?.videoModel || "seedance2.0");
+    jimeng.videoResolution = String(config.jimeng?.videoResolution || fallback.jimeng?.videoResolution || "720p");
+    jimeng.pollSeconds = Number.isFinite(pollSeconds) && pollSeconds >= 0
+      ? pollSeconds
+      : (fallback.jimeng?.pollSeconds || 30);
+  }
   return {
     key,
     name: String(config.name || fallback.name || key),
+    mediaType,
+    provider,
     prompt: String(config.prompt ?? config.fixedPrefix ?? fallback.prompt ?? ""),
     referenceTemplate: String(config.referenceTemplate ?? fallback.referenceTemplate ?? ""),
-    jimeng: {
-      imageModel: String(config.jimeng?.imageModel || fallback.jimeng.imageModel),
-      videoModel: String(config.jimeng?.videoModel || fallback.jimeng.videoModel),
-      imageResolution: String(config.jimeng?.imageResolution || fallback.jimeng.imageResolution),
-      videoResolution: String(config.jimeng?.videoResolution || fallback.jimeng.videoResolution),
-      queue: String(config.jimeng?.queue || ""),
-      pollSeconds: Number.isFinite(pollSeconds) && pollSeconds >= 0
-        ? pollSeconds
-        : fallback.jimeng.pollSeconds,
-      sessionStrategy: ["default", "project"].includes(config.jimeng?.sessionStrategy)
-        ? config.jimeng.sessionStrategy
-        : fallback.jimeng.sessionStrategy
-    }
+    jimeng
   };
 }
 
 function normalizeSettings(settings = {}) {
+  const presetsVersion = Number(settings.presetsVersion || 0);
+  const shouldAddBuiltInPresets = presetsVersion < defaultSettings.presetsVersion;
   const legacyConfig = settings.jimeng || settings.promptTemplates
     ? {
         key: "default",
@@ -205,17 +255,48 @@ function normalizeSettings(settings = {}) {
     : [legacyConfig || defaultSettings.modelConfigs[0]];
   const seen = new Set();
   const modelConfigs = rawConfigs
-    .map((config) => normalizeModelConfig(config))
+    .map((config) => normalizeModelConfig(config, config.mediaType === "video"
+      ? defaultSettings.modelConfigs.find((item) => item.mediaType === "video")
+      : defaultSettings.modelConfigs.find((item) => item.mediaType === "image")))
     .filter((config) => {
       if (seen.has(config.key)) return false;
       seen.add(config.key);
       return true;
     });
-  if (modelConfigs.length === 0) modelConfigs.push(normalizeModelConfig(defaultSettings.modelConfigs[0]));
+  for (const fallback of defaultSettings.modelConfigs) {
+    if (shouldAddBuiltInPresets && !modelConfigs.some((config) => config.key === fallback.key)) {
+      modelConfigs.push(normalizeModelConfig(fallback, fallback));
+    }
+  }
+  for (const fallback of defaultSettings.modelConfigs) {
+    if (!modelConfigs.some((config) => config.mediaType === fallback.mediaType)) {
+      modelConfigs.push(normalizeModelConfig(fallback, fallback));
+    }
+  }
+  const imageConfigs = modelConfigs.filter((config) => config.mediaType === "image");
+  const videoConfigs = modelConfigs.filter((config) => config.mediaType === "video");
+  const defaultImageConfigKey = imageConfigs.some((config) => config.key === settings.defaultImageConfigKey)
+    ? settings.defaultImageConfigKey
+    : imageConfigs.some((config) => config.key === defaultSettings.defaultImageConfigKey)
+      ? defaultSettings.defaultImageConfigKey
+      : imageConfigs.some((config) => config.key === settings.defaultConfigKey)
+      ? settings.defaultConfigKey
+      : imageConfigs[0]?.key || "";
+  const defaultVideoConfigKey = videoConfigs.some((config) => config.key === settings.defaultVideoConfigKey)
+    ? settings.defaultVideoConfigKey
+    : videoConfigs.some((config) => config.key === defaultSettings.defaultVideoConfigKey)
+      ? defaultSettings.defaultVideoConfigKey
+      : videoConfigs[0]?.key || "";
   const defaultConfigKey = modelConfigs.some((config) => config.key === settings.defaultConfigKey)
     ? settings.defaultConfigKey
-    : modelConfigs[0].key;
-  return { defaultConfigKey, modelConfigs };
+    : defaultImageConfigKey || modelConfigs[0].key;
+  return {
+    presetsVersion: defaultSettings.presetsVersion,
+    defaultConfigKey,
+    defaultImageConfigKey,
+    defaultVideoConfigKey,
+    modelConfigs
+  };
 }
 
 function normalizeAsset(asset = {}) {
@@ -238,31 +319,35 @@ function normalizeAsset(asset = {}) {
 }
 
 function normalizeShot(shot = {}) {
+  const legacyImageMedia = shot.mediaUrl && shot.mediaType !== "video";
+  const storyboardUrl = String(shot.storyboardUrl || (legacyImageMedia ? shot.mediaUrl : "") || "");
+  const mediaUrl = legacyImageMedia ? "" : String(shot.mediaUrl || "");
+  const storyboardUrls = uniqueStrings([storyboardUrl, ...uniqueStrings(shot.storyboardUrls)]);
+  const mediaUrls = uniqueStrings([mediaUrl, ...uniqueStrings(shot.mediaUrls)]);
   const materialStatus = generationStatuses.includes(shot.materialStatus)
     ? shot.materialStatus
     : (Array.isArray(shot.materialAssetRefs) && shot.materialAssetRefs.length > 0 ? "ready" : "idle");
+  const storyboardAssetRef = String(shot.storyboardAssetRef || "");
   const storyboardStatus = generationStatuses.includes(shot.storyboardStatus)
     ? shot.storyboardStatus
-    : (shot.storyboardUrl ? "ready" : "idle");
+    : (storyboardUrls.length > 0 || storyboardAssetRef ? "ready" : "idle");
   const videoStatus = generationStatuses.includes(shot.videoStatus || shot.generationStatus)
     ? (shot.videoStatus || shot.generationStatus)
-    : shot.mediaUrl
+    : mediaUrls.length > 0
       ? "ready"
       : "idle";
-
-  const mediaType = shot.mediaType === "video" ? "video" : "image";
-  const generator = mediaType === "video"
-    ? "jimeng-cli"
-    : (shot.generator === "jimeng-cli" ? "jimeng-cli" : "image-gen");
 
   return {
     id: shot.id || createId("shot"),
     rollType: shot.rollType === "A-ROLL" ? "A-ROLL" : "B-ROLL",
-    mediaType,
+    mediaType: "video",
     duration: Number.isFinite(Number(shot.duration)) ? Number(shot.duration) : 5,
     visualPrompt: String(shot.visualPrompt || ""),
-    generator,
+    generator: "jimeng-cli",
     configKey: String(shot.configKey || ""),
+    materialConfigKey: String(shot.materialConfigKey || (shot.mediaType !== "video" ? shot.configKey || "" : "")),
+    storyboardConfigKey: String(shot.storyboardConfigKey || (shot.mediaType !== "video" ? shot.configKey || "" : "")),
+    videoConfigKey: String(shot.videoConfigKey || (shot.mediaType === "video" ? shot.configKey || "" : "")),
     inputAssetRefs: uniqueStrings(shot.inputAssetRefs),
     materialPrompt: String(shot.materialPrompt || ""),
     materialAssetRefs: uniqueStrings(shot.materialAssetRefs),
@@ -273,14 +358,17 @@ function normalizeShot(shot = {}) {
     materialStartedAt: shot.materialStartedAt || null,
     materialCompletedAt: shot.materialCompletedAt || null,
     storyboardPrompt: String(shot.storyboardPrompt || ""),
-    storyboardUrl: String(shot.storyboardUrl || ""),
+    storyboardUrl: storyboardUrls[0] || "",
+    storyboardUrls,
+    storyboardAssetRef,
     storyboardStatus,
     storyboardTaskId: String(shot.storyboardTaskId || ""),
     storyboardError: String(shot.storyboardError || ""),
     storyboardRequestedAt: shot.storyboardRequestedAt || null,
     storyboardStartedAt: shot.storyboardStartedAt || null,
     storyboardCompletedAt: shot.storyboardCompletedAt || null,
-    mediaUrl: String(shot.mediaUrl || ""),
+    mediaUrl: mediaUrls[0] || "",
+    mediaUrls,
     notes: String(shot.notes || ""),
     generationStatus: videoStatus,
     generationTaskId: String(shot.videoTaskId || shot.generationTaskId || ""),
@@ -306,6 +394,9 @@ function normalizeProject(project = {}) {
     title: String(project.title || "未命名项目").trim() || "未命名项目",
     aspectRatio: normalizeAspectRatio(project.aspectRatio),
     defaultConfigKey: String(project.defaultConfigKey || ""),
+    materialConfigKey: String(project.materialConfigKey || project.defaultConfigKey || ""),
+    storyboardConfigKey: String(project.storyboardConfigKey || project.defaultConfigKey || ""),
+    videoConfigKey: String(project.videoConfigKey || project.defaultConfigKey || ""),
     hasDesign: Boolean(project.hasDesign),
     shots: Array.isArray(project.shots) ? project.shots.map(normalizeShot) : [],
     createdAt: project.createdAt || now,
@@ -439,7 +530,7 @@ function mediaFileNameFromUrl(url) {
 async function projectSummary(record) {
   const project = await readProject(record.id);
   const duration = project.shots.reduce((sum, shot) => sum + Number(shot.duration || 0), 0);
-  const cover = project.shots.find((shot) => shot.mediaUrl)?.mediaUrl || "";
+  const cover = project.shots.find((shot) => shot.storyboardUrl)?.storyboardUrl || "";
   return {
     ...record,
     shotCount: project.shots.length,
@@ -468,10 +559,27 @@ function autoReferencedAssetIds(shot, assets) {
     .map((asset) => asset.id);
 }
 
-function resolveModelConfig(settings, project, shot) {
-  const wanted = shot.configKey || project.defaultConfigKey || settings.defaultConfigKey;
-  return settings.modelConfigs.find((config) => config.key === wanted) ||
-    settings.modelConfigs.find((config) => config.key === settings.defaultConfigKey) ||
+function stageMediaType(stage) {
+  return stage === "video" ? "video" : "image";
+}
+
+function stageConfigField(stage) {
+  if (stage === "materials") return "materialConfigKey";
+  if (stage === "storyboard") return "storyboardConfigKey";
+  return "videoConfigKey";
+}
+
+function resolveModelConfig(settings, project, shot, stage = "video") {
+  const field = stageConfigField(stage);
+  const mediaType = stageMediaType(stage);
+  const wanted = shot[field] || project[field] || shot.configKey || project.defaultConfigKey ||
+    (mediaType === "video" ? settings.defaultVideoConfigKey : settings.defaultImageConfigKey) ||
+    settings.defaultConfigKey;
+  return settings.modelConfigs.find((config) => config.key === wanted && config.mediaType === mediaType) ||
+    settings.modelConfigs.find((config) => config.key === (
+      mediaType === "video" ? settings.defaultVideoConfigKey : settings.defaultImageConfigKey
+    )) ||
+    settings.modelConfigs.find((config) => config.mediaType === mediaType) ||
     settings.modelConfigs[0];
 }
 
@@ -548,7 +656,7 @@ function buildStagePrompt(shot, config, stage) {
 }
 
 function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "video") {
-  if (shot.generator === "image-gen" && stage !== "video") {
+  if (config.provider === "image-gen" && stage !== "video") {
     return {
       provider: "image-generation",
       aspectRatio: project.aspectRatio
@@ -565,9 +673,8 @@ function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "
     resolution: stage === "video"
       ? config.jimeng.videoResolution
       : config.jimeng.imageResolution,
-    queue: config.jimeng.queue,
     pollSeconds: config.jimeng.pollSeconds,
-    sessionStrategy: config.jimeng.sessionStrategy
+    newSession: true
   };
 }
 
@@ -579,7 +686,7 @@ function projectMediaPathFromUrl(project, url) {
 
 async function generationTask(project, shot, stage = "video") {
   const settings = await readSettings();
-  const modelConfig = resolveModelConfig(settings, project, shot);
+  const modelConfig = resolveModelConfig(settings, project, shot, stage);
   const library = await readAssetLibrary();
   const automaticRefs = autoReferencedAssetIds(shot, library.assets);
   const inputAssetIds = uniqueStrings([
@@ -600,17 +707,33 @@ async function generationTask(project, shot, stage = "video") {
       usage: asset.usage,
       autoReferenced: automaticRefs.includes(asset.id) && !shot.inputAssetRefs.includes(asset.id)
     }));
-  if (stage === "video" && shot.storyboardUrl) {
-    inputAssets.push({
-      id: `${shot.id}-storyboard`,
-      type: "image",
-      name: "故事板图",
-      url: shot.storyboardUrl,
-      path: projectMediaPathFromUrl(project, shot.storyboardUrl),
-      mimeType: "image/*",
-      usage: "storyboard",
-      autoReferenced: false
-    });
+  if (stage === "video") {
+    if (shot.storyboardAssetRef) {
+      const storyboardAsset = library.assets.find((asset) => asset.id === shot.storyboardAssetRef);
+      if (storyboardAsset) {
+        inputAssets.push({
+          id: storyboardAsset.id,
+          type: storyboardAsset.type,
+          name: storyboardAsset.name || "故事板图",
+          url: storyboardAsset.url,
+          path: resolve(assetFilesDir, storyboardAsset.fileName),
+          mimeType: storyboardAsset.mimeType,
+          usage: "storyboard",
+          autoReferenced: false
+        });
+      }
+    } else if (shot.storyboardUrl) {
+      inputAssets.push({
+        id: `${shot.id}-storyboard`,
+        type: "image",
+        name: "故事板图",
+        url: shot.storyboardUrl,
+        path: projectMediaPathFromUrl(project, shot.storyboardUrl),
+        mimeType: "image/*",
+        usage: "storyboard",
+        autoReferenced: false
+      });
+    }
   }
   const dimensions = aspectRatios[project.aspectRatio];
   const taskId = stageTaskId(shot, stage);
@@ -634,7 +757,7 @@ async function generationTask(project, shot, stage = "video") {
     shotId: shot.id,
     shotIndex: project.shots.findIndex((item) => item.id === shot.id) + 1,
     status: stageStatus(shot, stage),
-    generator: stage === "video" ? "jimeng-cli" : shot.generator,
+    generator: stage === "video" ? "jimeng-cli" : modelConfig.provider,
     mediaType: stage === "video" ? "video" : "image",
     duration: shot.duration,
     configKey: modelConfig.key,
@@ -649,6 +772,7 @@ async function generationTask(project, shot, stage = "video") {
     inputAssetRefs: shot.inputAssetRefs,
     materialAssetRefs: shot.materialAssetRefs,
     storyboardUrl: shot.storyboardUrl,
+    storyboardAssetRef: shot.storyboardAssetRef,
     autoAssetRefs: automaticRefs,
     generatorConfig: buildGeneratorConfig(shot, modelConfig, project, inputAssets, stage),
     videoConfirmedAt: shot.videoConfirmedAt,
@@ -661,17 +785,27 @@ async function generationTask(project, shot, stage = "video") {
   };
 }
 
-async function attachMedia(project, shot, sourcePath, mediaType) {
+function isVideoExtension(extension) {
+  return [".mp4", ".webm", ".mov"].includes(extension);
+}
+
+async function attachMedia(project, shot, sourcePath) {
   const resolvedSource = resolve(String(sourcePath));
   await stat(resolvedSource);
   const extension = extname(resolvedSource).toLowerCase();
+  if (!isVideoExtension(extension)) throw new Error("最终产物只支持视频文件");
   const fileName = `${shot.id}-${Date.now()}${extension}`;
   await copyFile(resolvedSource, join(projectMediaDir(project.id), fileName));
-  shot.mediaUrl = mediaUrl(project.id, fileName);
-  if (mediaType === "image" || mediaType === "video") shot.mediaType = mediaType;
+  const url = mediaUrl(project.id, fileName);
+  shot.mediaUrl = url;
+  shot.mediaUrls = uniqueStrings([url, ...(shot.mediaUrls || [])]);
+  shot.mediaType = "video";
   shot.generationStatus = "ready";
   shot.generationError = "";
   shot.generationCompletedAt = new Date().toISOString();
+  shot.videoStatus = "ready";
+  shot.videoError = "";
+  shot.videoCompletedAt = shot.generationCompletedAt;
 }
 
 async function copyGeneratedAssetToLibrary(sourcePath, shot, body = {}) {
@@ -698,7 +832,6 @@ async function copyGeneratedAssetToLibrary(sourcePath, shot, body = {}) {
   library.assets.unshift(asset);
   await saveAssetLibrary(library);
   shot.materialAssetRefs = uniqueStrings([...shot.materialAssetRefs, asset.id]);
-  shot.inputAssetRefs = uniqueStrings([...shot.inputAssetRefs, asset.id]);
   return asset;
 }
 
@@ -708,7 +841,10 @@ async function attachStoryboard(project, shot, sourcePath) {
   const extension = extname(resolvedSource).toLowerCase();
   const fileName = `${shot.id}-storyboard-${Date.now()}${extension}`;
   await copyFile(resolvedSource, join(projectMediaDir(project.id), fileName));
-  shot.storyboardUrl = mediaUrl(project.id, fileName);
+  const url = mediaUrl(project.id, fileName);
+  shot.storyboardUrl = url;
+  shot.storyboardUrls = uniqueStrings([url, ...(shot.storyboardUrls || [])]);
+  shot.storyboardAssetRef = "";
   shot.storyboardStatus = "ready";
   shot.storyboardError = "";
   shot.storyboardCompletedAt = new Date().toISOString();
@@ -747,22 +883,55 @@ function parseMultipart(buffer, contentType) {
   return { file, fields };
 }
 
-async function saveUploadedMedia(project, shot, request) {
+async function saveUploadedStageMedia(project, shot, stage, request) {
   const contentType = request.headers["content-type"] || "";
   if (!contentType.startsWith("multipart/form-data")) throw new Error("需要 multipart/form-data");
-  const { file } = parseMultipart(await readBodyBuffer(request), contentType);
+  const { file, fields } = parseMultipart(await readBodyBuffer(request), contentType);
   const extension = allowedUploads.get(file.mimeType);
   if (!extension) throw new Error("仅支持 PNG、JPEG、WebP、GIF、MP4、WebM 和 MOV");
 
-  const mediaType = file.mimeType.startsWith("video/") ? "video" : "image";
+  if (stage === "video" && !file.mimeType.startsWith("video/")) throw new Error("最终产物只支持视频文件");
+  if (stage !== "video" && !file.mimeType.startsWith("image/")) throw new Error("物料图和故事板只支持图片文件");
   const fileName = `${shot.id}-${Date.now()}${extension}`;
   await writeFile(join(projectMediaDir(project.id), fileName), file.content);
-  shot.mediaUrl = mediaUrl(project.id, fileName);
-  shot.mediaType = mediaType;
+  const sourcePath = join(projectMediaDir(project.id), fileName);
+  if (stage === "materials") {
+    const asset = await copyGeneratedAssetToLibrary(sourcePath, shot, {
+      assetName: fields.name || file.filename.replace(/\.[^.]+$/, ""),
+      usage: "shot-material",
+      autoReference: false
+    });
+    await rm(sourcePath, { force: true });
+    shot.materialStatus = "ready";
+    shot.materialTaskId = "";
+    shot.materialError = "";
+    shot.materialCompletedAt = new Date().toISOString();
+    return asset;
+  }
+  if (stage === "storyboard") {
+    const url = mediaUrl(project.id, fileName);
+    shot.storyboardUrl = url;
+    shot.storyboardUrls = uniqueStrings([url, ...(shot.storyboardUrls || [])]);
+    shot.storyboardAssetRef = "";
+    shot.storyboardStatus = "ready";
+    shot.storyboardTaskId = "";
+    shot.storyboardError = "";
+    shot.storyboardCompletedAt = new Date().toISOString();
+    return null;
+  }
+  const url = mediaUrl(project.id, fileName);
+  shot.mediaUrl = url;
+  shot.mediaUrls = uniqueStrings([url, ...(shot.mediaUrls || [])]);
+  shot.mediaType = "video";
   shot.generationStatus = "ready";
   shot.generationTaskId = "";
   shot.generationError = "";
   shot.generationCompletedAt = new Date().toISOString();
+  shot.videoStatus = "ready";
+  shot.videoTaskId = "";
+  shot.videoError = "";
+  shot.videoCompletedAt = shot.generationCompletedAt;
+  return null;
 }
 
 async function saveUploadedDesign(project, request) {
@@ -806,6 +975,86 @@ async function saveUploadedAsset(request) {
   library.assets.unshift(asset);
   await saveAssetLibrary(library);
   return asset;
+}
+
+async function deleteMaterialAssetFromShot(shot, assetId) {
+  const library = await readAssetLibrary();
+  const asset = library.assets.find((item) => item.id === assetId);
+  shot.materialAssetRefs = shot.materialAssetRefs.filter((id) => id !== assetId);
+  shot.inputAssetRefs = shot.inputAssetRefs.filter((id) => id !== assetId);
+  if (shot.materialAssetRefs.length === 0) {
+    shot.materialStatus = "idle";
+    shot.materialTaskId = "";
+    shot.materialError = "";
+    shot.materialRequestedAt = null;
+    shot.materialStartedAt = null;
+    shot.materialCompletedAt = null;
+  }
+  if (asset?.usage === "shot-material") {
+    library.assets = library.assets.filter((item) => item.id !== assetId);
+    if (asset.fileName) await rm(join(assetFilesDir, asset.fileName), { force: true });
+    await saveAssetLibrary(library);
+  }
+}
+
+async function deleteStageMedia(project, shot, stage, assetId = "") {
+  if (stage === "materials") {
+    if (shot.materialStatus === "processing") throw Object.assign(new Error("生成中的物料图暂时无法删除"), { status: 409 });
+    const targetIds = assetId ? [assetId] : [...shot.materialAssetRefs];
+    for (const id of targetIds) await deleteMaterialAssetFromShot(shot, id);
+    return;
+  }
+  if (stage === "storyboard") {
+    if (shot.storyboardStatus === "processing") throw Object.assign(new Error("生成中的故事板暂时无法删除"), { status: 409 });
+    if (assetId && assetId === shot.storyboardAssetRef) {
+      shot.storyboardAssetRef = "";
+    }
+    const currentUrls = uniqueStrings([shot.storyboardUrl, ...(shot.storyboardUrls || [])]);
+    const targetUrls = assetId && currentUrls.includes(assetId) ? [assetId] : (assetId ? [] : currentUrls);
+    for (const url of targetUrls) {
+      const fileName = basename(mediaFileNameFromUrl(url));
+      await rm(join(projectMediaDir(project.id), fileName), { force: true });
+    }
+    shot.storyboardUrls = assetId ? removeString(currentUrls, assetId) : [];
+    shot.storyboardUrl = shot.storyboardUrls[0] || "";
+    if (!assetId) shot.storyboardAssetRef = "";
+    shot.storyboardStatus = shot.storyboardUrl || shot.storyboardAssetRef ? "ready" : "idle";
+    shot.storyboardTaskId = "";
+    shot.storyboardError = "";
+    if (shot.storyboardStatus === "idle") {
+      shot.storyboardRequestedAt = null;
+      shot.storyboardStartedAt = null;
+      shot.storyboardCompletedAt = null;
+    }
+    return;
+  }
+  if (shot.videoStatus === "processing" || shot.generationStatus === "processing") {
+    throw Object.assign(new Error("生成中的视频暂时无法删除"), { status: 409 });
+  }
+  const currentUrls = uniqueStrings([shot.mediaUrl, ...(shot.mediaUrls || [])]);
+  const targetUrls = assetId && currentUrls.includes(assetId) ? [assetId] : (assetId ? [] : currentUrls);
+  for (const url of targetUrls) {
+    const fileName = basename(mediaFileNameFromUrl(url));
+    await rm(join(projectMediaDir(project.id), fileName), { force: true });
+  }
+  shot.mediaUrls = assetId ? removeString(currentUrls, assetId) : [];
+  shot.mediaUrl = shot.mediaUrls[0] || "";
+  shot.mediaType = "video";
+  shot.videoStatus = shot.mediaUrl ? "ready" : "idle";
+  shot.generationStatus = "idle";
+  shot.videoTaskId = "";
+  shot.generationTaskId = "";
+  shot.videoError = "";
+  shot.generationError = "";
+  shot.generationStatus = shot.videoStatus;
+  if (!shot.mediaUrl) {
+    shot.videoRequestedAt = null;
+    shot.generationRequestedAt = null;
+    shot.videoStartedAt = null;
+    shot.generationStartedAt = null;
+    shot.videoCompletedAt = null;
+    shot.generationCompletedAt = null;
+  }
 }
 
 async function findTask(taskId) {
@@ -915,6 +1164,9 @@ async function handleProjectsApi(request, response, url) {
       title: body.title,
       aspectRatio: body.aspectRatio,
       defaultConfigKey: body.defaultConfigKey,
+      materialConfigKey: body.materialConfigKey,
+      storyboardConfigKey: body.storyboardConfigKey,
+      videoConfigKey: body.videoConfigKey,
       shots: []
     });
     return sendJson(response, 201, await saveProject(project));
@@ -963,6 +1215,9 @@ async function handleProjectsApi(request, response, url) {
       title: body.title,
       aspectRatio: body.aspectRatio,
       defaultConfigKey: body.defaultConfigKey,
+      materialConfigKey: body.materialConfigKey,
+      storyboardConfigKey: body.storyboardConfigKey,
+      videoConfigKey: body.videoConfigKey,
       shots: body.shots
     }));
   }
@@ -973,6 +1228,9 @@ async function handleProjectsApi(request, response, url) {
     if (body.title !== undefined) project.title = String(body.title).trim() || project.title;
     if (body.aspectRatio !== undefined) project.aspectRatio = normalizeAspectRatio(body.aspectRatio);
     if (body.defaultConfigKey !== undefined) project.defaultConfigKey = String(body.defaultConfigKey || "");
+    if (body.materialConfigKey !== undefined) project.materialConfigKey = String(body.materialConfigKey || "");
+    if (body.storyboardConfigKey !== undefined) project.storyboardConfigKey = String(body.storyboardConfigKey || "");
+    if (body.videoConfigKey !== undefined) project.videoConfigKey = String(body.videoConfigKey || "");
     return sendJson(response, 200, await saveProject(project));
   }
 
@@ -1017,6 +1275,63 @@ async function handleShotsApi(request, response, url) {
     }
   }
 
+  const stageItemMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/(materials|storyboard|video)\/([^/]+)$/);
+  if (stageItemMatch) {
+    const project = await readProject(decodeURIComponent(stageItemMatch[1]));
+    const shot = project.shots.find((item) => item.id === decodeURIComponent(stageItemMatch[2]));
+    const stage = stageItemMatch[3];
+    if (!shot) return sendError(response, 404, "Shot not found");
+    if (request.method === "DELETE") {
+      try {
+        await deleteStageMedia(project, shot, stage, decodeURIComponent(stageItemMatch[4]));
+      } catch (error) {
+        return sendError(response, error.status || 500, error.message);
+      }
+      return sendJson(response, 200, await saveProject(project));
+    }
+  }
+
+  const stageMediaMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/(materials|storyboard|video)$/);
+  if (stageMediaMatch) {
+    const project = await readProject(decodeURIComponent(stageMediaMatch[1]));
+    const shot = project.shots.find((item) => item.id === decodeURIComponent(stageMediaMatch[2]));
+    const stage = stageMediaMatch[3];
+    if (!shot) return sendError(response, 404, "Shot not found");
+
+    if (request.method === "POST") {
+      if ((request.headers["content-type"] || "").startsWith("multipart/form-data")) {
+        await saveUploadedStageMedia(project, shot, stage, request);
+      } else {
+        const body = await readBody(request);
+        if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
+        if (stage === "materials") {
+          await copyGeneratedAssetToLibrary(body.sourcePath, shot, body);
+          shot.materialStatus = "ready";
+          shot.materialTaskId = "";
+          shot.materialError = "";
+          shot.materialCompletedAt = new Date().toISOString();
+        } else if (stage === "storyboard") {
+          await attachStoryboard(project, shot, body.sourcePath);
+          shot.storyboardTaskId = "";
+        } else {
+          await attachMedia(project, shot, body.sourcePath);
+          shot.videoTaskId = "";
+          shot.generationTaskId = "";
+        }
+      }
+      return sendJson(response, 200, await saveProject(project));
+    }
+
+    if (request.method === "DELETE") {
+      try {
+        await deleteStageMedia(project, shot, stage);
+      } catch (error) {
+        return sendError(response, error.status || 500, error.message);
+      }
+      return sendJson(response, 200, await saveProject(project));
+    }
+  }
+
   const mediaMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shots\/([^/]+)\/media$/);
   if (mediaMatch) {
     const project = await readProject(decodeURIComponent(mediaMatch[1]));
@@ -1025,30 +1340,21 @@ async function handleShotsApi(request, response, url) {
 
     if (request.method === "POST") {
       if ((request.headers["content-type"] || "").startsWith("multipart/form-data")) {
-        await saveUploadedMedia(project, shot, request);
+        await saveUploadedStageMedia(project, shot, "video", request);
       } else {
         const body = await readBody(request);
         if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
-        await attachMedia(project, shot, body.sourcePath, body.mediaType);
+        await attachMedia(project, shot, body.sourcePath);
       }
       return sendJson(response, 200, await saveProject(project));
     }
 
     if (request.method === "DELETE") {
-      if (shot.generationStatus === "processing") {
-        return sendError(response, 409, "生成中的素材暂时无法删除");
+      try {
+        await deleteStageMedia(project, shot, "video");
+      } catch (error) {
+        return sendError(response, error.status || 500, error.message);
       }
-      if (shot.mediaUrl) {
-        const fileName = basename(mediaFileNameFromUrl(shot.mediaUrl));
-        await rm(join(projectMediaDir(project.id), fileName), { force: true });
-      }
-      shot.mediaUrl = "";
-      shot.generationStatus = "idle";
-      shot.generationTaskId = "";
-      shot.generationError = "";
-      shot.generationRequestedAt = null;
-      shot.generationStartedAt = null;
-      shot.generationCompletedAt = null;
       return sendJson(response, 200, await saveProject(project));
     }
   }
@@ -1116,6 +1422,17 @@ async function handleAssetsApi(request, response, url) {
           shot.inputAssetRefs = refs;
           changed = true;
         }
+        const materialRefs = shot.materialAssetRefs.filter((id) => id !== asset.id);
+        if (materialRefs.length !== shot.materialAssetRefs.length) {
+          shot.materialAssetRefs = materialRefs;
+          shot.materialStatus = materialRefs.length > 0 ? shot.materialStatus : "idle";
+          changed = true;
+        }
+        if (shot.storyboardAssetRef === asset.id) {
+          shot.storyboardAssetRef = "";
+          shot.storyboardStatus = shot.storyboardUrl ? shot.storyboardStatus : "idle";
+          changed = true;
+        }
       }
       if (changed) await saveProject(project);
     }
@@ -1170,14 +1487,6 @@ async function handleGenerationApi(request, response, url) {
       if (requestedIds && !requestedIds.has(shot.id)) continue;
       if (!shot.visualPrompt.trim()) {
         skipped.push({ shotId: shot.id, reason: "missing-prompt" });
-        continue;
-      }
-      if (stage === "storyboard" && shot.inputAssetRefs.length === 0 && shot.materialAssetRefs.length === 0) {
-        skipped.push({ shotId: shot.id, reason: "missing-materials" });
-        continue;
-      }
-      if (stage === "video" && !shot.storyboardUrl) {
-        skipped.push({ shotId: shot.id, reason: "missing-storyboard" });
         continue;
       }
       if (["pending", "processing"].includes(stageStatus(shot, stage))) {
@@ -1237,7 +1546,7 @@ async function handleGenerationApi(request, response, url) {
         } else if (stage === "storyboard") {
           await attachStoryboard(project, shot, body.sourcePath);
         } else {
-          await attachMedia(project, shot, body.sourcePath, body.mediaType || "video");
+          await attachMedia(project, shot, body.sourcePath);
           shot.videoStatus = shot.generationStatus;
           shot.videoError = shot.generationError;
           shot.videoCompletedAt = shot.generationCompletedAt;
