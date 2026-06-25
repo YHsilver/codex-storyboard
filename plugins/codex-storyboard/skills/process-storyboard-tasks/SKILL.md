@@ -18,7 +18,7 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
    If a required capability is unavailable, do not claim affected tasks. Report the missing capability and continue with tasks whose generators are available.
 
 3. Prefer stage order when multiple stages are pending for the same project: `materials`, then `storyboard`, then `video`. Stages are not hard dependencies; process a later stage if it is queued even when prior outputs are absent.
-4. Material and storyboard image tasks can be processed in batches from the queue, but process claimed tasks one at a time. Video tasks are queued one at a time by the storyboard UI and must remain single-confirmed.
+4. Material, storyboard image, and video tasks can be queued in batches from the storyboard UI, but process claimed tasks one at a time.
 5. Before generating, call `claim_storyboard_generation_task`.
 6. If the claimed task has `hasDesign: true`, read the complete Markdown file at the exact absolute `designPath` before generating anything.
 7. Build the prompt from `compiledPrompt`. The task already resolved the shot/project/global model configuration into `configKey`, `configName`, `compiledPrompt`, and `generatorConfig`. Treat `promptTemplates.referenceTemplate` as guidance only; do not append it unless it clearly improves the specific generation.
@@ -43,7 +43,7 @@ Use the exact absolute `outputDir` supplied by the task. Put downloaded Jimeng o
 ## Guardrails
 
 - Do not mark a task complete until the exact local file has been visually or technically verified.
-- Video tasks are already single-confirmed by the storyboard app; do not batch-submit videos outside that queue.
+- Video tasks may be batch-confirmed by the storyboard app; process each queued video task individually after it appears in the queue.
 - Preserve `projectId`, `aspectRatio`, `width`, `height`, and requested video `duration`.
 - Never guess, truncate, or partially read `DESIGN.md` when `hasDesign` is true.
 - Do not apply a DESIGN.md from the active workspace or another project.

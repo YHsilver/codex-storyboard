@@ -24,6 +24,7 @@ Each shot should include:
 - `storyboardConfigKey`: optional image model override for the storyboard-image stage.
 - `videoConfigKey`: optional video model override for the final video stage.
 - `inputAssetRefs`: optional material library asset IDs to use as references.
+- `subjectAssetRefs`: optional subject material IDs for recurring people; subject images may be used for material/storyboard generation, and subject images/audio should be used for video generation.
 - `materialAssetRefs`: optional image material library asset IDs to show as material-image outputs.
 - `storyboardAssetRef`: optional image material library asset ID to use as the storyboard output.
 - `notes`: editing, pacing, transition, or production notes.

@@ -56,6 +56,7 @@ function shotSchema({ requireId = false } = {}) {
       storyboardConfigKey: { type: "string" },
       videoConfigKey: { type: "string" },
       inputAssetRefs: { type: "array", items: { type: "string" } },
+      subjectAssetRefs: { type: "array", items: { type: "string" } },
       materialAssetRefs: { type: "array", items: { type: "string" } },
       storyboardAssetRef: { type: "string" },
       notes: { type: "string" }

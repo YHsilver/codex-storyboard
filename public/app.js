@@ -65,7 +65,10 @@ let designMenuCloseTimer;
 let assetPickerShotId = "";
 let assetPickerStage = "materials";
 let assetUploadShotId = "";
+let assetUploadKind = "material";
+let assetUploadMeta = {};
 let videoConfirmShotId = "";
+let videoConfirmShotIds = [];
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -123,6 +126,7 @@ function emptyShot() {
     storyboardConfigKey: "",
     videoConfigKey: "",
     inputAssetRefs: [],
+    subjectAssetRefs: [],
     materialPrompt: "",
     materialAssetRefs: [],
     materialStatus: "idle",
@@ -168,13 +172,19 @@ function canQueueStage(shot, stage) {
 function updateBatchButton() {
   const materialCount = project?.shots.filter((shot) => canQueueStage(shot, "materials")).length || 0;
   const storyboardCount = project?.shots.filter((shot) => canQueueStage(shot, "storyboard")).length || 0;
-  const nextVideo = project?.shots.find((shot) => canQueueStage(shot, "video"));
-  generateMaterialsButton.disabled = materialCount === 0;
-  generateMaterialsButton.textContent = materialCount > 0 ? `批量物料图 ${materialCount}` : "批量物料图";
-  generateStoryboardsButton.disabled = storyboardCount === 0;
-  generateStoryboardsButton.textContent = storyboardCount > 0 ? `批量故事板 ${storyboardCount}` : "批量故事板";
-  generateAllButton.disabled = !nextVideo;
-  generateAllButton.textContent = nextVideo ? "确认下个视频" : "逐条视频";
+  const videoCount = project?.shots.filter((shot) => canQueueStage(shot, "video")).length || 0;
+  const pendingMaterials = project?.shots.filter((shot) => shot.materialStatus === "pending").length || 0;
+  const pendingStoryboards = project?.shots.filter((shot) => shot.storyboardStatus === "pending").length || 0;
+  const pendingVideos = project?.shots.filter((shot) => (shot.videoStatus || shot.generationStatus) === "pending").length || 0;
+  generateMaterialsButton.dataset.action = pendingMaterials > 0 ? "cancel" : "generate";
+  generateMaterialsButton.disabled = pendingMaterials === 0 && materialCount === 0;
+  generateMaterialsButton.textContent = pendingMaterials > 0 ? `取消物料队列 ${pendingMaterials}` : (materialCount > 0 ? `批量物料图 ${materialCount}` : "批量物料图");
+  generateStoryboardsButton.dataset.action = pendingStoryboards > 0 ? "cancel" : "generate";
+  generateStoryboardsButton.disabled = pendingStoryboards === 0 && storyboardCount === 0;
+  generateStoryboardsButton.textContent = pendingStoryboards > 0 ? `取消故事板队列 ${pendingStoryboards}` : (storyboardCount > 0 ? `批量故事板 ${storyboardCount}` : "批量故事板");
+  generateAllButton.dataset.action = pendingVideos > 0 ? "cancel" : "generate";
+  generateAllButton.disabled = pendingVideos === 0 && videoCount === 0;
+  generateAllButton.textContent = pendingVideos > 0 ? `取消视频队列 ${pendingVideos}` : (videoCount > 0 ? `批量视频 ${videoCount}` : "批量视频");
 }
 
 function projectPath(projectId) {
@@ -293,7 +303,7 @@ async function loadProject(projectId) {
       loadSettingsAndAssets()
     ]);
     project = loadedProject;
-    renderStoryboard();
+    if (project) renderStoryboard();
     startPolling();
   } catch (error) {
     showToast("项目不存在或已被删除", "error");
@@ -511,6 +521,65 @@ function storyboardAsset(shot) {
   return shot.storyboardAssetRef ? assetById(shot.storyboardAssetRef) : null;
 }
 
+function assetNotes(asset) {
+  return asset?.notes || asset?.usage || "";
+}
+
+function subjectKey(asset) {
+  return String(asset.personName || asset.name || asset.id || "")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function subjectDisplayName(group) {
+  return group.name || group.image?.name || group.audio?.name || "未命名主体";
+}
+
+function subjectDisplayNotes(group) {
+  return group.notes || assetNotes(group.image) || assetNotes(group.audio);
+}
+
+function groupSubjectAssets(assets = assetLibrary) {
+  const groups = new Map();
+  assets
+    .filter((asset) => asset.kind === "subject")
+    .forEach((asset) => {
+      const key = subjectKey(asset);
+      const group = groups.get(key) || {
+        key,
+        ids: [],
+        name: asset.personName || asset.name,
+        notes: assetNotes(asset),
+        image: null,
+        audio: null,
+        assets: []
+      };
+      group.ids.push(asset.id);
+      group.assets.push(asset);
+      if (!group.notes && assetNotes(asset)) group.notes = assetNotes(asset);
+      if (!group.name && (asset.personName || asset.name)) group.name = asset.personName || asset.name;
+      if (asset.type === "audio" && !group.audio) group.audio = asset;
+      if (asset.type === "image" && !group.image) group.image = asset;
+      groups.set(key, group);
+    });
+  return [...groups.values()].sort((a, b) => subjectDisplayName(a).localeCompare(subjectDisplayName(b), "zh-Hans-CN"));
+}
+
+function subjectGroupsForRefs(refs = []) {
+  const refSet = new Set(refs);
+  return groupSubjectAssets().filter((group) => group.ids.some((id) => refSet.has(id)));
+}
+
+function subjectGroupForAsset(assetId) {
+  return groupSubjectAssets().find((group) => group.ids.includes(assetId));
+}
+
+function renderSubjectThumb(group) {
+  const thumb = renderAssetThumb(group.image || group.audio);
+  if (group.audio) thumb.dataset.hasAudio = "true";
+  return thumb;
+}
+
 function renderAssetThumb(asset) {
   const thumb = document.createElement("span");
   thumb.className = "asset-thumb";
@@ -575,23 +644,97 @@ function renderAssetRefs(container, shot) {
   container.append(list, actions);
 }
 
-function chooseAssetUpload(shotId = "") {
+function renderSubjectRefs(container, shot) {
+  container.replaceChildren();
+  const list = document.createElement("div");
+  list.className = "asset-ref-list subject-ref-list";
+  const refs = Array.isArray(shot.subjectAssetRefs) ? shot.subjectAssetRefs : [];
+  if (refs.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "empty-preview";
+    empty.textContent = "未选择主体";
+    list.append(empty);
+  }
+  subjectGroupsForRefs(refs).forEach((group) => {
+    const item = document.createElement("div");
+    item.className = "asset-ref-item subject-ref-item";
+    const meta = document.createElement("span");
+    meta.className = "asset-meta";
+    const name = document.createElement("strong");
+    name.textContent = subjectDisplayName(group);
+    const detail = document.createElement("span");
+    detail.textContent = group.audio ? "含音频" : "仅图片";
+    meta.append(name, detail);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-asset-ref";
+    remove.textContent = "移除";
+    remove.addEventListener("click", () => {
+      shot.subjectAssetRefs = refs.filter((id) => !group.ids.includes(id));
+      renderSubjectRefs(container, shot);
+      queueSave();
+    });
+    item.append(renderSubjectThumb(group), meta, remove);
+    list.append(item);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "asset-ref-actions";
+  const pick = document.createElement("button");
+  pick.type = "button";
+  pick.textContent = "选择主体";
+  pick.addEventListener("click", () => openAssetPicker(shot.id, "subjects"));
+  const upload = document.createElement("button");
+  upload.type = "button";
+  upload.textContent = "上传主体";
+  upload.addEventListener("click", () => chooseAssetUpload(shot.id, "subject"));
+  actions.append(pick, upload);
+  container.append(list, actions);
+}
+
+function chooseAssetUpload(shotId = "", kind = "material", meta = {}) {
   assetUploadShotId = shotId;
+  assetUploadKind = kind;
+  assetUploadMeta = meta;
+  assetUpload.accept = meta.accept || "image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/mp3,audio/wav,audio/mp4,audio/aac";
   assetUpload.value = "";
   assetUpload.click();
+}
+
+function chooseSubjectAudioUpload(group) {
+  chooseAssetUpload("", "subject", {
+    accept: "audio/mpeg,audio/mp3,audio/wav,audio/mp4,audio/aac",
+    replaceAssetId: group.audio?.id || "",
+    fields: {
+      name: subjectDisplayName(group),
+      personName: subjectDisplayName(group),
+      notes: subjectDisplayNotes(group)
+    }
+  });
 }
 
 async function uploadAsset(file) {
   if (!file) return;
   const form = new FormData();
   form.append("file", file);
+  if (assetUploadKind === "subject") form.append("kind", "subject");
+  Object.entries(assetUploadMeta.fields || {}).forEach(([key, value]) => {
+    form.append(key, value);
+  });
   try {
     const result = await api("/api/assets", { method: "POST", body: form });
     assetLibrary = result.assets || [];
+    if (assetUploadMeta.replaceAssetId) {
+      await deleteAsset(assetUploadMeta.replaceAssetId, { silent: true });
+    }
     if (assetUploadShotId && project) {
       const shot = project.shots.find((item) => item.id === assetUploadShotId);
       if (shot) {
-        shot.inputAssetRefs = [...new Set([...(shot.inputAssetRefs || []), result.asset.id])];
+        const field = assetUploadKind === "subject" ? "subjectAssetRefs" : "inputAssetRefs";
+        const ids = assetUploadKind === "subject"
+          ? (subjectGroupForAsset(result.asset.id)?.ids || [result.asset.id])
+          : [result.asset.id];
+        shot[field] = [...new Set([...(shot[field] || []), ...ids])];
         queueSave();
       }
     }
@@ -602,6 +745,8 @@ async function uploadAsset(file) {
     showToast(error.message, "error");
   } finally {
     assetUploadShotId = "";
+    assetUploadKind = "material";
+    assetUploadMeta = {};
   }
 }
 
@@ -888,6 +1033,8 @@ function renderStoryboard() {
       });
     });
 
+    renderSubjectRefs(row.querySelector(".subject-ref-cell"), shot);
+
     row.querySelectorAll(".stage-product").forEach((container) => {
       renderStageProduct(container, shot, index, container.dataset.stage);
     });
@@ -1098,31 +1245,120 @@ function renderAssetLibraryDialog() {
     list.append(empty);
     return;
   }
-  assetLibrary.forEach((asset) => {
+
+  const subjects = groupSubjectAssets();
+  const materials = assetLibrary.filter((asset) => asset.kind !== "subject");
+
+  const renderSection = (title, emptyText) => {
+    const section = document.createElement("section");
+    section.className = "asset-library-section";
+    const heading = document.createElement("div");
+    heading.className = "asset-library-section-title";
+    heading.textContent = title;
+    const grid = document.createElement("div");
+    grid.className = "asset-library-grid";
+    section.append(heading, grid);
+    list.append(section);
+    if (emptyText) {
+      const empty = document.createElement("p");
+      empty.className = "delete-message";
+      empty.textContent = emptyText;
+      grid.append(empty);
+    }
+    return grid;
+  };
+
+  const subjectGrid = renderSection("主体", subjects.length === 0 ? "暂无主体。" : "");
+  subjects.forEach((group) => {
+    const card = document.createElement("article");
+    card.className = "asset-card subject-card";
+    const fields = document.createElement("div");
+    fields.className = "asset-card-fields";
+    const name = Object.assign(document.createElement("input"), {
+      value: subjectDisplayName(group),
+      placeholder: "名称",
+      "aria-label": "主体名称"
+    });
+    const notes = Object.assign(document.createElement("textarea"), {
+      value: subjectDisplayNotes(group),
+      placeholder: "备注",
+      "aria-label": "主体备注"
+    });
+    notes.className = "asset-note-input";
+    const sync = () => {
+      group.assets.forEach((asset) => updateAsset(asset.id, {
+        name: name.value,
+        personName: name.value,
+        notes: notes.value,
+        kind: "subject"
+      }));
+    };
+    name.addEventListener("change", sync);
+    notes.addEventListener("change", sync);
+    fields.append(name, notes);
+    const media = document.createElement("div");
+    media.className = "asset-card-media";
+    const mediaStatus = document.createElement("span");
+    mediaStatus.textContent = group.image && group.audio
+      ? "图片 + 音频"
+      : (group.audio ? "音频" : "图片");
+    const audioBox = document.createElement("div");
+    audioBox.className = "subject-audio-box";
+    const audioLabel = document.createElement("span");
+    audioLabel.textContent = group.audio ? group.audio.name : "未关联音频";
+    const audioButton = document.createElement("button");
+    audioButton.type = "button";
+    audioButton.className = "secondary compact-button";
+    audioButton.textContent = group.audio ? "替换音频" : "上传音频";
+    audioButton.addEventListener("click", () => chooseSubjectAudioUpload(group));
+    audioBox.append(audioLabel, audioButton);
+    media.append(renderSubjectThumb(group), mediaStatus, audioBox);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete-asset";
+    remove.textContent = "删除";
+    remove.addEventListener("click", async () => {
+      for (const assetId of group.ids) await deleteAsset(assetId, { silent: true });
+      renderAssetLibraryDialog();
+      showToast("主体已删除");
+    });
+    card.append(media, fields, remove);
+    subjectGrid.append(card);
+  });
+
+  const materialGrid = renderSection("普通物料", materials.length === 0 ? "暂无普通物料。" : "");
+  materials.forEach((asset) => {
     const card = document.createElement("article");
     card.className = "asset-card";
     const fields = document.createElement("div");
     fields.className = "asset-card-fields";
-    const name = Object.assign(document.createElement("input"), { value: asset.name, placeholder: "名称" });
-    const personName = Object.assign(document.createElement("input"), { value: asset.personName || "", placeholder: "人物名" });
-    const aliases = Object.assign(document.createElement("input"), { value: (asset.aliases || []).join(", "), placeholder: "别名，逗号分隔" });
-    const tags = Object.assign(document.createElement("input"), { value: (asset.tags || []).join(", "), placeholder: "标签，逗号分隔" });
-    [name, personName, aliases, tags].forEach((input) => {
-      input.addEventListener("change", () => updateAsset(asset.id, {
-        name: name.value,
-        personName: personName.value,
-        aliases: aliases.value.split(","),
-        tags: tags.value.split(",")
-      }));
+    const name = Object.assign(document.createElement("input"), {
+      value: asset.name,
+      placeholder: "名称",
+      "aria-label": "物料名称"
     });
-    fields.append(name, personName, aliases, tags);
+    const notes = Object.assign(document.createElement("textarea"), {
+      value: assetNotes(asset),
+      placeholder: "备注",
+      "aria-label": "物料备注"
+    });
+    notes.className = "asset-note-input";
+    const sync = () => updateAsset(asset.id, {
+        name: name.value,
+        notes: notes.value,
+        kind: "material"
+      });
+    [name, notes].forEach((input) => {
+      input.addEventListener("change", sync);
+    });
+    fields.append(name, notes);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-asset";
     remove.textContent = "删除";
     remove.addEventListener("click", () => deleteAsset(asset.id));
     card.append(renderAssetThumb(asset), fields, remove);
-    list.append(card);
+    materialGrid.append(card);
   });
 }
 
@@ -1159,16 +1395,16 @@ async function updateAsset(assetId, update) {
     body: JSON.stringify(update)
   });
   assetLibrary = result.assets || [];
-  renderStoryboard();
+  if (project) renderStoryboard();
 }
 
-async function deleteAsset(assetId) {
+async function deleteAsset(assetId, options = {}) {
   const result = await api(`/api/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
   assetLibrary = result.assets || [];
   if (project) project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
-  renderAssetLibraryDialog();
-  renderStoryboard();
-  showToast("物料已删除");
+  if (!options.silent) renderAssetLibraryDialog();
+  if (project) renderStoryboard();
+  if (!options.silent) showToast("物料已删除");
 }
 
 function openAssetPicker(shotId, stage = "materials") {
@@ -1177,34 +1413,43 @@ function openAssetPicker(shotId, stage = "materials") {
   const shot = project.shots.find((item) => item.id === shotId);
   const selected = new Set(stage === "storyboard"
     ? [shot?.storyboardAssetRef].filter(Boolean)
-    : (stage === "materials" ? shot?.materialAssetRefs || [] : shot?.inputAssetRefs || []));
+    : (stage === "materials"
+      ? shot?.materialAssetRefs || []
+      : (stage === "subjects" ? shot?.subjectAssetRefs || [] : shot?.inputAssetRefs || [])));
   const list = document.querySelector("#asset-picker-list");
   list.replaceChildren();
   document.querySelector("#asset-picker-title").textContent =
-    stage === "storyboard" ? "选择故事板图" : "选择物料图";
-  const candidates = assetLibrary.filter((asset) => asset.type === "image");
+    stage === "storyboard" ? "选择故事板图" : (stage === "subjects" ? "选择主体参考" : "选择物料图");
+  const candidates = stage === "subjects"
+    ? groupSubjectAssets()
+    : assetLibrary.filter((asset) => asset.type === "image");
   if (candidates.length === 0) {
     const empty = document.createElement("p");
     empty.className = "delete-message";
-    empty.textContent = "物料库中暂无图片物料。";
+    empty.textContent = stage === "subjects" ? "物料库中暂无主体。" : "物料库中暂无图片物料。";
     list.append(empty);
   }
-  candidates.forEach((asset) => {
+  candidates.forEach((item) => {
+    const asset = stage === "subjects" ? item.image || item.audio : item;
     const label = document.createElement("label");
     label.className = "asset-picker-option";
     const input = document.createElement("input");
     input.type = stage === "storyboard" ? "radio" : "checkbox";
     input.name = "asset-picker-selection";
-    input.value = asset.id;
-    input.checked = selected.has(asset.id);
+    input.value = stage === "subjects" ? item.key : asset.id;
+    input.checked = stage === "subjects"
+      ? item.ids.some((id) => selected.has(id))
+      : selected.has(asset.id);
     const meta = document.createElement("span");
     meta.className = "asset-meta";
     const name = document.createElement("strong");
-    name.textContent = asset.name;
+    name.textContent = stage === "subjects" ? subjectDisplayName(item) : asset.name;
     const detail = document.createElement("span");
-    detail.textContent = [asset.personName, ...(asset.tags || [])].filter(Boolean).join(" · ") || asset.type;
+    detail.textContent = stage === "subjects"
+      ? [item.audio ? "含音频" : "仅图片", subjectDisplayNotes(item)].filter(Boolean).join(" · ")
+      : assetNotes(asset);
     meta.append(name, detail);
-    label.append(input, renderAssetThumb(asset), meta);
+    label.append(input, stage === "subjects" ? renderSubjectThumb(item) : renderAssetThumb(asset), meta);
     list.append(label);
   });
   assetPickerDialog.showModal();
@@ -1233,6 +1478,9 @@ function applyAssetPicker() {
     shot.materialTaskId = "";
     shot.materialError = "";
     shot.materialCompletedAt = selected.length > 0 ? new Date().toISOString() : null;
+  } else if (assetPickerStage === "subjects") {
+    const groups = groupSubjectAssets();
+    shot.subjectAssetRefs = selected.flatMap((key) => groups.find((group) => group.key === key)?.ids || []);
   } else {
     shot.inputAssetRefs = selected;
   }
@@ -1417,9 +1665,13 @@ async function cancelGeneration(shot) {
 }
 
 function confirmVideoGeneration(shot) {
-  videoConfirmShotId = shot.id;
+  const shots = Array.isArray(shot) ? shot : [shot];
+  videoConfirmShotId = shots[0]?.id || "";
+  videoConfirmShotIds = shots.map((item) => item.id);
   document.querySelector("#video-confirm-message").textContent =
-    `即将提交镜头 ${project.shots.indexOf(shot) + 1} 的视频生成任务。已有物料图和故事板图会自动作为输入，视频任务会消耗额度，且每次只能提交一个。`;
+    shots.length === 1
+      ? `即将提交镜头 ${project.shots.indexOf(shots[0]) + 1} 的视频生成任务。主体参考、物料图和故事板图会自动作为输入，视频任务会消耗额度。`
+      : `即将批量提交 ${shots.length} 个视频生成任务。主体参考、物料图和故事板图会自动作为输入，视频任务会消耗额度。`;
   videoConfirmDialog.showModal();
 }
 
@@ -1444,6 +1696,30 @@ async function queueGeneration(shotIds, force = false, options = {}) {
     renderStoryboard();
   } catch (error) {
     saveStatus.textContent = "提交失败";
+    showToast(error.message, "error");
+  }
+}
+
+async function cancelGenerationBatch(stage, shotIds) {
+  saveStatus.textContent = "取消生成任务…";
+  try {
+    const result = await api("/api/generation/tasks/cancel", {
+      method: "POST",
+      body: JSON.stringify({
+        projectId: project.id,
+        shotIds,
+        stage
+      })
+    });
+    project = result.project;
+    saveStatus.textContent = result.canceled.length > 0
+      ? `已取消 ${result.canceled.length} 个生成任务`
+      : "没有可取消的任务";
+    renderStoryboard();
+  } catch (error) {
+    project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
+    renderStoryboard();
+    saveStatus.textContent = "取消失败";
     showToast(error.message, "error");
   }
 }
@@ -1545,14 +1821,29 @@ document.querySelector("#confirm-delete").addEventListener("click", async (event
 });
 
 generateAllButton.addEventListener("click", async () => {
-  const shot = project.shots.find((item) => canQueueStage(item, "video"));
-  if (shot) confirmVideoGeneration(shot);
+  const pending = project.shots.filter((shot) => (shot.videoStatus || shot.generationStatus) === "pending");
+  if (pending.length > 0) {
+    await cancelGenerationBatch("video", pending.map((shot) => shot.id));
+    return;
+  }
+  const shots = project.shots.filter((item) => canQueueStage(item, "video"));
+  if (shots.length > 0) confirmVideoGeneration(shots);
 });
 generateMaterialsButton.addEventListener("click", async () => {
+  const pending = project.shots.filter((shot) => shot.materialStatus === "pending");
+  if (pending.length > 0) {
+    await cancelGenerationBatch("materials", pending.map((shot) => shot.id));
+    return;
+  }
   const shotIds = project.shots.filter((shot) => canQueueStage(shot, "materials")).map((shot) => shot.id);
   await queueGeneration(shotIds, true, { stage: "materials" });
 });
 generateStoryboardsButton.addEventListener("click", async () => {
+  const pending = project.shots.filter((shot) => shot.storyboardStatus === "pending");
+  if (pending.length > 0) {
+    await cancelGenerationBatch("storyboard", pending.map((shot) => shot.id));
+    return;
+  }
   const shotIds = project.shots.filter((shot) => canQueueStage(shot, "storyboard")).map((shot) => shot.id);
   await queueGeneration(shotIds, true, { stage: "storyboard" });
 });
@@ -1560,6 +1851,7 @@ generateStoryboardsButton.addEventListener("click", async () => {
 mediaUpload.addEventListener("change", () => uploadMedia(mediaUpload.files?.[0]));
 assetUpload.addEventListener("change", () => uploadAsset(assetUpload.files?.[0]));
 document.querySelector("#choose-asset-upload").addEventListener("click", () => chooseAssetUpload(""));
+document.querySelector("#choose-subject-upload").addEventListener("click", () => chooseAssetUpload("", "subject"));
 document.querySelector("#save-settings").addEventListener("click", saveSettingsFromDialog);
 document.querySelector("#add-image-config").addEventListener("click", () => {
   addModelConfig("image");
@@ -1569,11 +1861,13 @@ document.querySelector("#add-video-config").addEventListener("click", () => {
 });
 document.querySelector("#apply-asset-picker").addEventListener("click", applyAssetPicker);
 document.querySelector("#confirm-video-generation").addEventListener("click", async () => {
-  const shot = project.shots.find((item) => item.id === videoConfirmShotId);
+  const shotIds = videoConfirmShotIds.length > 0 ? videoConfirmShotIds : [videoConfirmShotId].filter(Boolean);
+  const shots = project.shots.filter((item) => shotIds.includes(item.id));
   videoConfirmDialog.close();
   videoConfirmShotId = "";
-  if (!shot) return;
-  await queueGeneration([shot.id], ["ready", "failed"].includes(shot.videoStatus || shot.generationStatus), {
+  videoConfirmShotIds = [];
+  if (shots.length === 0) return;
+  await queueGeneration(shotIds, shots.some((shot) => ["ready", "failed"].includes(shot.videoStatus || shot.generationStatus)), {
     stage: "video",
     videoConfirmed: true
   });

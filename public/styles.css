@@ -268,6 +268,15 @@ button:disabled { cursor: not-allowed; }
 .primary:hover { background: var(--accent-dark); }
 .secondary { border: 1px solid var(--control-border); background: var(--surface-raised); color: var(--control-ink); }
 .secondary:hover { background: var(--surface-hover); border-color: #7b8791; }
+.secondary[data-action="cancel"] {
+  border-color: #d39a43;
+  color: #a16300;
+}
+.secondary[data-action="cancel"]:hover {
+  border-color: #c8752d;
+  background: #fff7e8;
+  color: #9a4f0f;
+}
 .secondary:disabled { opacity: .5; }
 .danger-button { background: #c83535; color: white; }
 .danger-button:hover { background: #ac2525; }
@@ -415,7 +424,7 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1680px;
+  min-width: 1860px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -424,6 +433,7 @@ table {
 .col-roll { width: 108px; }
 .col-duration { width: 86px; }
 .col-visual { width: 360px; }
+.col-subjects { width: 180px; }
 .col-materials { width: 260px; }
 .col-storyboard { width: 250px; }
 .col-video { width: 250px; }
@@ -780,7 +790,8 @@ input:focus-visible, textarea:focus-visible {
 }
 .generate-shot:disabled { opacity: .5; }
 
-.asset-ref-cell {
+.asset-ref-cell,
+.subject-ref-cell {
   display: grid;
   gap: 8px;
 }
@@ -802,6 +813,7 @@ input:focus-visible, textarea:focus-visible {
   background: var(--surface-subtle);
 }
 .asset-thumb {
+  position: relative;
   width: 38px;
   height: 38px;
   display: grid;
@@ -811,6 +823,21 @@ input:focus-visible, textarea:focus-visible {
   background: var(--preview-ground);
   color: #6f7884;
   font-size: 10px;
+}
+.asset-thumb[data-has-audio="true"]::after {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  content: "♪";
+  border-radius: 50%;
+  background: rgba(17,25,29,.78);
+  color: white;
+  font-size: 10px;
+  line-height: 1;
 }
 .asset-thumb img {
   width: 100%;
@@ -848,27 +875,93 @@ input:focus-visible, textarea:focus-visible {
 .delete-asset:hover { background: #fff0f0; color: #c33; }
 .asset-library-list,
 .asset-picker-list {
-  max-height: 320px;
   overflow: auto;
   display: grid;
   gap: 8px;
 }
+.asset-library-list {
+  max-height: min(66vh, 720px);
+  align-content: start;
+  gap: 18px;
+}
+.asset-picker-list {
+  max-height: 320px;
+}
+.asset-library-section {
+  display: grid;
+  gap: 10px;
+}
+.asset-library-section-title {
+  color: #596470;
+  font-size: 12px;
+  font-weight: 800;
+}
+.asset-library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
+}
 .asset-card {
   grid-template-columns: 48px 1fr auto;
+  align-items: stretch;
   background: var(--paper);
+}
+.subject-card {
+  grid-template-columns: 150px 1fr auto;
 }
 .asset-card .asset-thumb {
   width: 48px;
   height: 48px;
 }
+.subject-card .asset-thumb {
+  width: 58px;
+  height: 58px;
+}
+.asset-card-media {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.subject-audio-box {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+}
+.subject-audio-box span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.subject-audio-box button {
+  width: 100%;
+}
 .asset-card-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 6px;
 }
-.asset-card-fields input {
+.asset-card-fields input,
+.asset-note-input {
   border-color: var(--line-soft);
   background: var(--surface-raised);
+}
+.asset-note-input {
+  min-height: 62px;
+  height: 62px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 .asset-picker-option {
   min-height: 58px;
@@ -933,6 +1026,11 @@ input:focus-visible, textarea:focus-visible {
   justify-content: space-between;
   gap: 12px;
 }
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 .delete-shot {
   width: 32px;
@@ -988,7 +1086,14 @@ input:focus-visible, textarea:focus-visible {
   max-height: min(88vh, 900px);
 }
 #asset-library-dialog {
-  width: min(780px, calc(100vw - 32px));
+  width: min(1120px, calc(100vw - 32px));
+  max-height: min(88vh, 900px);
+}
+#asset-library-dialog form {
+  max-height: min(88vh, 900px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
 }
 #settings-dialog form {
   max-height: min(88vh, 900px);

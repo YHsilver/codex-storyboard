@@ -301,9 +301,12 @@ function normalizeSettings(settings = {}) {
 
 function normalizeAsset(asset = {}) {
   const type = asset.type === "audio" ? "audio" : "image";
+  const kind = asset.kind === "subject" || asset.isSubject === true ? "subject" : "material";
   return {
     id: safeId(asset.id || "") ? asset.id : createId("asset"),
     type,
+    kind,
+    isSubject: kind === "subject",
     name: String(asset.name || "未命名物料").trim() || "未命名物料",
     url: String(asset.url || ""),
     fileName: basename(String(asset.fileName || "")),
@@ -311,6 +314,7 @@ function normalizeAsset(asset = {}) {
     personName: String(asset.personName || ""),
     aliases: uniqueStrings(asset.aliases),
     tags: uniqueStrings(asset.tags),
+    notes: String(asset.notes ?? asset.remark ?? ""),
     usage: String(asset.usage || ""),
     autoReference: asset.autoReference !== false,
     createdAt: asset.createdAt || new Date().toISOString(),
@@ -349,6 +353,7 @@ function normalizeShot(shot = {}) {
     storyboardConfigKey: String(shot.storyboardConfigKey || (shot.mediaType !== "video" ? shot.configKey || "" : "")),
     videoConfigKey: String(shot.videoConfigKey || (shot.mediaType === "video" ? shot.configKey || "" : "")),
     inputAssetRefs: uniqueStrings(shot.inputAssetRefs),
+    subjectAssetRefs: uniqueStrings(shot.subjectAssetRefs),
     materialPrompt: String(shot.materialPrompt || ""),
     materialAssetRefs: uniqueStrings(shot.materialAssetRefs),
     materialStatus,
@@ -559,6 +564,27 @@ function autoReferencedAssetIds(shot, assets) {
     .map((asset) => asset.id);
 }
 
+function subjectAssetKey(asset) {
+  return String(asset.personName || asset.name || asset.id || "")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function expandSubjectAssetRefs(subjectAssetRefs, assets) {
+  const selected = new Set(uniqueStrings(subjectAssetRefs));
+  const subjectKeys = new Set(
+    assets
+      .filter((asset) => asset.kind === "subject" && selected.has(asset.id))
+      .map(subjectAssetKey)
+  );
+  return uniqueStrings([
+    ...selected,
+    ...assets
+      .filter((asset) => asset.kind === "subject" && subjectKeys.has(subjectAssetKey(asset)))
+      .map((asset) => asset.id)
+  ]);
+}
+
 function stageMediaType(stage) {
   return stage === "video" ? "video" : "image";
 }
@@ -689,22 +715,29 @@ async function generationTask(project, shot, stage = "video") {
   const modelConfig = resolveModelConfig(settings, project, shot, stage);
   const library = await readAssetLibrary();
   const automaticRefs = autoReferencedAssetIds(shot, library.assets);
+  const subjectAssetRefs = expandSubjectAssetRefs(shot.subjectAssetRefs, library.assets);
   const inputAssetIds = uniqueStrings([
     ...shot.inputAssetRefs,
+    ...subjectAssetRefs,
     ...shot.materialAssetRefs,
     ...automaticRefs
   ]);
   const inputAssets = inputAssetIds
     .map((assetId) => library.assets.find((asset) => asset.id === assetId))
     .filter(Boolean)
+    .filter((asset) => stage === "video" || asset.type === "image")
     .map((asset) => ({
       id: asset.id,
       type: asset.type,
+      kind: asset.kind,
+      isSubject: asset.kind === "subject",
       name: asset.name,
       url: asset.url,
       path: resolve(assetFilesDir, asset.fileName),
       mimeType: asset.mimeType,
-      usage: asset.usage,
+      usage: asset.kind === "subject"
+        ? (asset.type === "audio" ? "subject-audio" : "subject-image")
+        : asset.usage,
       autoReferenced: automaticRefs.includes(asset.id) && !shot.inputAssetRefs.includes(asset.id)
     }));
   if (stage === "video") {
@@ -770,6 +803,8 @@ async function generationTask(project, shot, stage = "video") {
     },
     inputAssets,
     inputAssetRefs: shot.inputAssetRefs,
+    subjectAssetRefs,
+    subjectAssets: inputAssets.filter((asset) => asset.kind === "subject"),
     materialAssetRefs: shot.materialAssetRefs,
     storyboardUrl: shot.storyboardUrl,
     storyboardAssetRef: shot.storyboardAssetRef,
@@ -968,7 +1003,9 @@ async function saveUploadedAsset(request) {
     personName: fields.personName || "",
     aliases: String(fields.aliases || "").split(","),
     tags: String(fields.tags || "").split(","),
+    notes: fields.notes || fields.remark || "",
     usage: fields.usage || "",
+    kind: fields.kind || fields.assetKind || "",
     autoReference: fields.autoReference !== "false"
   });
   const library = await readAssetLibrary();
@@ -1076,6 +1113,39 @@ function mutateGenerationTask(callback) {
   const mutation = generationMutationQueue.then(callback, callback);
   generationMutationQueue = mutation.catch(() => {});
   return mutation;
+}
+
+function cancelPendingStage(shot, stage) {
+  if (stage === "materials") {
+    shot.materialStatus = shot.materialAssetRefs.length > 0 ? "ready" : "idle";
+    shot.materialTaskId = "";
+    shot.materialError = "";
+    shot.materialRequestedAt = null;
+    shot.materialStartedAt = null;
+    shot.materialCompletedAt = shot.materialAssetRefs.length > 0 ? shot.materialCompletedAt : null;
+    return;
+  }
+  if (stage === "storyboard") {
+    shot.storyboardStatus = shot.storyboardUrl ? "ready" : "idle";
+    shot.storyboardTaskId = "";
+    shot.storyboardError = "";
+    shot.storyboardRequestedAt = null;
+    shot.storyboardStartedAt = null;
+    shot.storyboardCompletedAt = shot.storyboardUrl ? shot.storyboardCompletedAt : null;
+    return;
+  }
+  shot.videoStatus = shot.mediaUrl ? "ready" : "idle";
+  shot.generationStatus = shot.videoStatus;
+  shot.videoTaskId = "";
+  shot.generationTaskId = "";
+  shot.videoError = "";
+  shot.generationError = "";
+  shot.videoRequestedAt = null;
+  shot.generationRequestedAt = null;
+  shot.videoStartedAt = null;
+  shot.generationStartedAt = null;
+  shot.videoCompletedAt = shot.mediaUrl ? shot.videoCompletedAt : null;
+  shot.generationCompletedAt = shot.videoCompletedAt;
 }
 
 async function migrateLegacyProject() {
@@ -1402,7 +1472,10 @@ async function handleAssetsApi(request, response, url) {
       personName: body.personName ?? library.assets[index].personName,
       aliases: body.aliases ?? library.assets[index].aliases,
       tags: body.tags ?? library.assets[index].tags,
+      notes: body.notes ?? body.remark ?? library.assets[index].notes,
       usage: body.usage ?? library.assets[index].usage,
+      kind: body.kind ?? body.assetKind ?? library.assets[index].kind,
+      isSubject: body.isSubject ?? library.assets[index].isSubject,
       autoReference: body.autoReference ?? library.assets[index].autoReference,
       updatedAt: new Date().toISOString()
     });
@@ -1420,6 +1493,11 @@ async function handleAssetsApi(request, response, url) {
         const refs = shot.inputAssetRefs.filter((id) => id !== asset.id);
         if (refs.length !== shot.inputAssetRefs.length) {
           shot.inputAssetRefs = refs;
+          changed = true;
+        }
+        const subjectRefs = shot.subjectAssetRefs.filter((id) => id !== asset.id);
+        if (subjectRefs.length !== shot.subjectAssetRefs.length) {
+          shot.subjectAssetRefs = subjectRefs;
           changed = true;
         }
         const materialRefs = shot.materialAssetRefs.filter((id) => id !== asset.id);
@@ -1474,7 +1552,7 @@ async function handleGenerationApi(request, response, url) {
     const requestedIds = Array.isArray(body.shotIds) ? new Set(body.shotIds.map(String)) : null;
     const requestedShots = project.shots.filter((shot) => !requestedIds || requestedIds.has(shot.id));
     if (stage === "video") {
-      if (requestedShots.length !== 1) return sendError(response, 400, "视频生成只能单个提交，不能批量提交");
+      if (requestedShots.length === 0) return sendError(response, 400, "没有可提交的视频任务");
       if (body.videoConfirmed !== true) {
         return sendError(response, 400, "视频生成需要用户手动确认");
       }
@@ -1504,6 +1582,33 @@ async function handleGenerationApi(request, response, url) {
 
     const saved = await saveProject(project);
     return sendJson(response, 201, { project: saved, queued, skipped });
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/generation/tasks/cancel") {
+    return mutateGenerationTask(async () => {
+      const body = await readBody(request);
+      if (!body.projectId) return sendError(response, 400, "projectId is required");
+      const stage = generationStages.includes(body.stage) ? body.stage : "video";
+      const project = await readProject(String(body.projectId));
+      const requestedIds = Array.isArray(body.shotIds) ? new Set(body.shotIds.map(String)) : null;
+      const canceled = [];
+      const skipped = [];
+
+      for (const shot of project.shots) {
+        if (requestedIds && !requestedIds.has(shot.id)) continue;
+        const status = stageStatus(shot, stage);
+        if (status !== "pending") {
+          skipped.push({ shotId: shot.id, reason: status });
+          continue;
+        }
+        const taskId = stageTaskId(shot, stage);
+        cancelPendingStage(shot, stage);
+        canceled.push({ shotId: shot.id, taskId });
+      }
+
+      const saved = await saveProject(project);
+      return sendJson(response, 200, { project: saved, canceled, skipped });
+    });
   }
 
   const taskMatch = url.pathname.match(
@@ -1589,34 +1694,7 @@ async function handleGenerationApi(request, response, url) {
         if (stageStatus(shot, stage) !== "pending") {
           return sendError(response, 409, `Task is ${stageStatus(shot, stage)}`);
         }
-        if (stage === "materials") {
-          shot.materialStatus = shot.materialAssetRefs.length > 0 ? "ready" : "idle";
-          shot.materialTaskId = "";
-          shot.materialError = "";
-          shot.materialRequestedAt = null;
-          shot.materialStartedAt = null;
-          shot.materialCompletedAt = shot.materialAssetRefs.length > 0 ? shot.materialCompletedAt : null;
-        } else if (stage === "storyboard") {
-          shot.storyboardStatus = shot.storyboardUrl ? "ready" : "idle";
-          shot.storyboardTaskId = "";
-          shot.storyboardError = "";
-          shot.storyboardRequestedAt = null;
-          shot.storyboardStartedAt = null;
-          shot.storyboardCompletedAt = shot.storyboardUrl ? shot.storyboardCompletedAt : null;
-        } else {
-          shot.videoStatus = shot.mediaUrl ? "ready" : "idle";
-          shot.generationStatus = shot.videoStatus;
-          shot.videoTaskId = "";
-          shot.generationTaskId = "";
-          shot.videoError = "";
-          shot.generationError = "";
-          shot.videoRequestedAt = null;
-          shot.generationRequestedAt = null;
-          shot.videoStartedAt = null;
-          shot.generationStartedAt = null;
-          shot.videoCompletedAt = shot.mediaUrl ? shot.videoCompletedAt : null;
-          shot.generationCompletedAt = shot.videoCompletedAt;
-        }
+        cancelPendingStage(shot, stage);
       }
 
       const saved = await saveProject(project);
