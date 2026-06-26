@@ -874,6 +874,7 @@ function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "
     provider: "jimeng-cli",
     imageCommand: imageInputs.length > 0 ? "image2image" : "text2image",
     videoCommand: "multimodal2video",
+    aspectRatio: project.aspectRatio,
     modelVersion: stage === "video"
       ? config.jimeng.videoModel
       : config.jimeng.imageModel,
