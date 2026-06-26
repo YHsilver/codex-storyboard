@@ -15,11 +15,13 @@ Use the Codex Storyboard MCP project tools. Never control the browser and never 
 4. Do not create shots one at a time.
 5. Return the created project ID and tell the user to refresh or open the storyboard.
 
+When drafting shots, write each `visualPrompt` in this order: location, shot size, story action, camera movement. The story action section should include any dialogue, sound, subtitles, or timing cues that affect the shot; do not split dialogue into a separate section.
+
 Each shot should include:
 
 - `rollType`: `A-ROLL` for primary presentation or spoken footage; `B-ROLL` for supporting visuals.
 - `duration`: seconds.
-- `visualPrompt`: concrete visual description used for asset generation, including dialogue, sound, subtitles, and motion notes when relevant.
+- `visualPrompt`: concrete visual description used for asset generation, formatted as location, shot size, story action, and camera movement; include dialogue, sound, subtitles, and motion notes inside the story action when relevant.
 - `materialConfigKey`: optional image model override for the material-image stage.
 - `storyboardConfigKey`: optional image model override for the storyboard-image stage.
 - `videoConfigKey`: optional video model override for the final video stage.
