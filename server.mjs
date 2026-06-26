@@ -626,6 +626,25 @@ function expandSubjectAssetRefs(subjectAssetRefs, assets) {
   ]);
 }
 
+function stageSubjectAssetRefs(subjectAssetRefs, assets, stage) {
+  const expanded = expandSubjectAssetRefs(subjectAssetRefs, assets);
+  if (stage !== "video") return expanded;
+
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const groups = new Map();
+  uniqueStrings([...subjectAssetRefs, ...expanded]).forEach((assetId) => {
+    const asset = byId.get(assetId);
+    if (!asset || asset.kind !== "subject") return;
+    const key = subjectAssetKey(asset);
+    if (!groups.has(key)) groups.set(key, { image: "", audio: "" });
+    const group = groups.get(key);
+    if (asset.type === "image" && !group.image) group.image = asset.id;
+    if (asset.type === "audio" && !group.audio) group.audio = asset.id;
+  });
+
+  return uniqueStrings([...groups.values()].flatMap((group) => [group.image, group.audio].filter(Boolean)));
+}
+
 function stageSelfAssetIds(shot, stage) {
   if (stage === "materials") return uniqueStrings(shot.materialAssetRefs);
   if (stage === "storyboard") return uniqueStrings([shot.storyboardAssetRef]);
@@ -836,6 +855,7 @@ function setStagePending(shot, stage) {
   shot.videoCompletedAt = null;
   shot.generationCompletedAt = null;
   shot.videoConfirmedAt = now;
+  shot.jimengSubmitId = "";
 }
 
 function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "video") {
@@ -893,7 +913,7 @@ async function generationTask(project, shot, stage = "video") {
   const settings = await readSettings();
   const modelConfig = resolveModelConfig(settings, project, shot, stage);
   const library = await readAssetLibrary();
-  const subjectAssetRefs = expandSubjectAssetRefs(shot.subjectAssetRefs, library.assets);
+  const subjectAssetRefs = stageSubjectAssetRefs(shot.subjectAssetRefs, library.assets, stage);
   const inputAssetIds = stageReferenceAssetIds(shot, subjectAssetRefs, stage);
   const inputAssets = inputAssetIds
     .map((assetId) => library.assets.find((asset) => asset.id === assetId))
@@ -976,6 +996,7 @@ async function generationTask(project, shot, stage = "video") {
     status: stageStatus(shot, stage),
     generator: stage === "video" ? "jimeng-cli" : modelConfig.provider,
     mediaType: stage === "video" ? "video" : "image",
+    requiresUserConfirmation: stage === "video",
     duration: shot.duration,
     configKey: modelConfig.key,
     configName: modelConfig.name,
