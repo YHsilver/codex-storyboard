@@ -8,6 +8,7 @@ description: Process pending Codex Storyboard image and video generation tasks. 
 Process the local storyboard queue at `http://127.0.0.1:43218`.
 
 ## Workflow
+> all command execute in local machine (not in sandbox)
 
 1. Call `list_storyboard_generation_tasks` with status `pending`.
 2. Verify the capability required by each pending task before claiming it:
@@ -17,7 +18,7 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
 
    If a required capability is unavailable, do not claim affected tasks. Report the missing capability and continue with tasks whose generators are available.
 
-3. Before running any Dreamina video generation command (`dreamina multimodal2video`, `image2video`, `text2video`, `frames2video`, or similar), ask the user for explicit confirmation in the current chat turn and wait for their reply. This confirmation is required even if command approval, auto-approval, or "approve for me" mode is enabled. Do not treat the storyboard app's queue confirmation as permission to run Dreamina from Codex; it only permits queue creation. Querying an existing `jimengSubmitId` with `dreamina query_result` does not require this extra confirmation.
+3. Before running any Dreamina video generation command (`dreamina multimodal2video`, `image2video`, `text2video`, `frames2video`, or similar), show the user the final submission parameters in the current chat turn and wait for explicit confirmation. Include the final prompt, model version, duration, aspect ratio, video resolution, poll interval, image inputs, audio inputs, output directory, and the exact command shape you will run. This confirmation is required even if command approval, auto-approval, or "approve for me" mode is enabled. Do not treat the storyboard app's queue confirmation as permission to run Dreamina from Codex; it only permits queue creation. Querying an existing `jimengSubmitId` with `dreamina query_result` does not require this extra confirmation.
 4. Prefer stage order when multiple stages are pending for the same project: `materials`, then `storyboard`, then `video`. Stages are not hard dependencies; process a later stage if it is queued even when prior outputs are absent.
 5. Process generation tasks in batches of up to 5 concurrent tasks. Start a new batch only after every task in the current batch has completed, failed, or been recorded as async `querying`.
 6. Before generating each task in a batch, call `claim_storyboard_generation_task` for that task. If a claim fails, skip only that task and continue with other tasks in the batch.
@@ -29,6 +30,9 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
    - Treat `referenceTemplate` / `promptTemplates.referenceTemplate` as a strong recommended format. Rewrite it for the current shot, fill or remove placeholders, add concrete scene details, and delete sections that do not apply.
    - For `video` tasks, treat `referenceTemplate` as a strong format constraint: preserve its structure, section order, style requirements, and negative controls as much as possible, and mainly fill in shot-specific story, camera/action details, and `[图1]` references.
    - Refer to images only with labels such as `[图1]`, `[图2]`, matching `inputAssets[].imageLabel` and input order exactly.
+   - For `video` tasks with subject audio, bind each subject's audio to the subject the first time that subject is introduced with an image label. Use a compact form such as `主体A：[图1]，声音/台词参考：@音频1` or `主体A：[图1]，音色参考：@音频1`, matching the audio input order you will pass to Dreamina. If the same subject appears again later in the prompt, keep using the subject name and image label only; do not repeat the audio reference.
+   - When multiple subjects have separate image/audio references, explicitly pair each first subject mention with its corresponding image label and audio label so Dreamina does not confuse voices between subjects. Do not attach an audio label to a different subject just because it appears nearby in `inputAssets`; infer pairings from asset names, aliases, `usage`, shot text, and project design only.
+   - For `video` tasks, include a storyboard/`【分镜】` section only when a current-shot storyboard image is present in `inputAssets`. If no storyboard image is available, remove the entire storyboard/`【分镜】` module from the final API prompt instead of leaving an empty heading or generic text.
    - Do not read image/audio file contents to understand references. Use only file names, asset names, `usage`, `imageLabel`, shot text, and DESIGN.md when present.
 9. Route by `stage`, `generator`, and `mediaType`:
 
