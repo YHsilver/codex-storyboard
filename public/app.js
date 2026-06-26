@@ -3,6 +3,7 @@ const storyboardView = document.querySelector("#storyboard-view");
 const projectsGrid = document.querySelector("#projects-grid");
 const projectCardTemplate = document.querySelector("#project-card-template");
 const body = document.querySelector("#shots-body");
+const tableShell = document.querySelector(".table-shell");
 const shotTemplate = document.querySelector("#shot-row-template");
 const saveStatus = document.querySelector("#save-status");
 const durationTotal = document.querySelector("#duration-total");
@@ -152,6 +153,49 @@ function formatDuration(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+function mediaFileNameFromUrl(url) {
+  const value = String(url || "");
+  if (!value) return "";
+  try {
+    const parsed = new URL(value, location.origin);
+    return decodeURIComponent(parsed.pathname.split("/").filter(Boolean).at(-1) || "");
+  } catch {
+    const clean = value.split(/[?#]/)[0];
+    return decodeURIComponent(clean.split("/").filter(Boolean).at(-1) || "");
+  }
+}
+
+function setLightboxCaption(label, fileName = "") {
+  const caption = document.querySelector("#lightbox-caption");
+  caption.replaceChildren();
+  const labelNode = document.createElement("span");
+  labelNode.className = "lightbox-caption-label";
+  labelNode.textContent = label;
+  caption.append(labelNode);
+  if (!fileName) return;
+  const fileNode = document.createElement("span");
+  fileNode.className = "lightbox-file-name";
+  fileNode.textContent = fileName;
+  fileNode.title = fileName;
+  caption.append(fileNode);
+}
+
+function tableScrollPosition() {
+  if (!tableShell) return null;
+  return {
+    top: tableShell.scrollTop,
+    left: tableShell.scrollLeft
+  };
+}
+
+function restoreTableScroll(position) {
+  if (!position || !tableShell) return;
+  requestAnimationFrame(() => {
+    tableShell.scrollTop = position.top;
+    tableShell.scrollLeft = position.left;
+  });
+}
+
 function statusLabel(status, error = "") {
   return {
     idle: "未生成",
@@ -257,6 +301,11 @@ async function loadSettingsAndAssets() {
   ]);
   settings = settingsResult;
   assetLibrary = assetsResult.assets || [];
+}
+
+async function refreshAssetLibrary() {
+  const result = await api("/api/assets");
+  assetLibrary = result.assets || [];
 }
 
 function renderProjects() {
@@ -441,6 +490,15 @@ function renderMediaOutputs(container, shot, index, stage) {
 
 function renderStageProduct(container, shot, index, stage) {
   container.replaceChildren();
+  container.tabIndex = stage === "materials" || stage === "storyboard" ? 0 : -1;
+  container.setAttribute("aria-label", `${stageInfo(shot, stage).label}，聚焦后可粘贴上传文件`);
+  container.onpaste = async (event) => {
+    if (stage !== "materials" && stage !== "storyboard") return;
+    const file = pastedFileForStage(event, stage);
+    if (!file) return;
+    event.preventDefault();
+    await uploadStageFile(shot.id, stage, file);
+  };
   const meta = stageConfigMeta(stage);
   const configWrap = document.createElement("div");
   configWrap.className = "stage-config-cell";
@@ -473,24 +531,35 @@ function chooseUpload(shotId, stage = "video") {
   mediaUpload.click();
 }
 
-async function uploadMedia(file) {
-  if (!project || !uploadShotId || !file) return;
+async function uploadStageFile(shotId, stage, file) {
+  if (!project || !shotId || !file) return;
   const form = new FormData();
   form.append("file", file);
   saveStatus.textContent = "上传中…";
   try {
     project = await api(
-      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(uploadShotId)}/${uploadStage}`,
+      `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shotId)}/${stage}`,
       { method: "POST", body: form }
     );
+    if (stage === "materials") await refreshAssetLibrary();
     closeLightbox();
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     saveStatus.textContent = "已保存";
     showToast("产物已上传");
   } catch (error) {
     saveStatus.textContent = "上传失败";
     showToast(error.message, "error");
   }
+}
+
+async function uploadMedia(file) {
+  await uploadStageFile(uploadShotId, uploadStage, file);
+}
+
+function pastedFileForStage(event, stage) {
+  const files = [...(event.clipboardData?.files || [])];
+  if (stage === "video") return files.find((file) => file.type.startsWith("video/"));
+  return files.find((file) => file.type.startsWith("image/"));
 }
 
 async function deleteStageMedia(shot, stage = "video", assetId = "") {
@@ -504,7 +573,7 @@ async function deleteStageMedia(shot, stage = "video", assetId = "") {
       { method: "DELETE" }
     );
     closeLightbox();
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     saveStatus.textContent = "已保存";
     showToast("产物已删除");
   } catch (error) {
@@ -753,7 +822,7 @@ async function uploadAsset(file) {
         queueSave();
       }
     }
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     renderAssetLibraryDialog();
     showToast("物料已添加");
   } catch (error) {
@@ -777,8 +846,10 @@ function openLightbox(shot, index, stage = "video", url = "") {
   media.src = mediaUrl;
   media.alt = shot.visualPrompt || `镜头 ${index + 1}`;
   lightboxStage.append(media);
-  document.querySelector("#lightbox-caption").textContent =
-    `镜头 ${String(index + 1).padStart(2, "0")} · ${stageInfo(shot, stage).label}`;
+  setLightboxCaption(
+    `镜头 ${String(index + 1).padStart(2, "0")} · ${stageInfo(shot, stage).label}`,
+    mediaFileNameFromUrl(mediaUrl)
+  );
   showLightbox();
   document.body.classList.add("lightbox-open");
   document.querySelector("#lightbox-close").focus();
@@ -801,7 +872,7 @@ function openAssetLightbox(asset) {
   image.src = asset.url;
   image.alt = asset.name || "物料图片";
   lightboxStage.append(image);
-  document.querySelector("#lightbox-caption").textContent = asset.name || "物料图片";
+  setLightboxCaption(asset.name || "物料图片", asset.fileName || mediaFileNameFromUrl(asset.url));
   showLightbox();
   document.body.classList.add("lightbox-open");
   document.querySelector("#lightbox-close").focus();
@@ -1042,7 +1113,8 @@ async function saveProject() {
   }
 }
 
-function renderStoryboard() {
+function renderStoryboard(options = {}) {
+  const scrollPosition = options.preserveScroll ? tableScrollPosition() : null;
   closeSelect();
   document.title = `${project.title} · 智能分镜台`;
   document.querySelector("#project-title").textContent = project.title;
@@ -1098,7 +1170,7 @@ function renderStoryboard() {
         { method: "DELETE" }
       );
       project.shots.splice(index, 1);
-      renderStoryboard();
+      renderStoryboard({ preserveScroll: true });
     });
     body.append(row);
     row.querySelectorAll("textarea").forEach(resizeTextarea);
@@ -1106,6 +1178,7 @@ function renderStoryboard() {
 
   updateSummary();
   updateBatchButton();
+  restoreTableScroll(scrollPosition);
 }
 
 function renderDesignState() {
@@ -1333,11 +1406,15 @@ function renderAssetLibraryDialog() {
       placeholder: "名称",
       "aria-label": "主体名称"
     });
+    name.dataset.assetEdit = "subject-name";
+    name.dataset.assetIds = group.ids.join(",");
     const notes = Object.assign(document.createElement("textarea"), {
       value: subjectDisplayNotes(group),
       placeholder: "备注",
       "aria-label": "主体备注"
     });
+    notes.dataset.assetEdit = "subject-notes";
+    notes.dataset.assetIds = group.ids.join(",");
     notes.className = "asset-note-input";
     const sync = () => {
       group.assets.forEach((asset) => updateAsset(asset.id, {
@@ -1412,11 +1489,15 @@ function renderAssetLibraryDialog() {
       placeholder: "名称",
       "aria-label": "物料名称"
     });
+    name.dataset.assetEdit = "material-name";
+    name.dataset.assetId = asset.id;
     const notes = Object.assign(document.createElement("textarea"), {
       value: assetNotes(asset),
       placeholder: "备注",
       "aria-label": "物料备注"
     });
+    notes.dataset.assetEdit = "material-notes";
+    notes.dataset.assetId = asset.id;
     notes.className = "asset-note-input";
     const sync = () => updateAsset(asset.id, {
         name: name.value,
@@ -1460,7 +1541,7 @@ async function saveSettingsFromDialog() {
   };
   settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(next) });
   renderModelConfigDialog();
-  renderStoryboard();
+  renderStoryboard({ preserveScroll: true });
   showToast("配置已保存");
 }
 
@@ -1470,7 +1551,41 @@ async function updateAsset(assetId, update) {
     body: JSON.stringify(update)
   });
   assetLibrary = result.assets || [];
-  if (project) renderStoryboard();
+  if (project) renderStoryboard({ preserveScroll: true });
+}
+
+async function flushAssetLibraryEdits() {
+  if (!assetLibraryDialog.open) return;
+  const updates = new Map();
+  document.querySelectorAll("#asset-library-dialog [data-asset-edit]").forEach((field) => {
+    const edit = field.dataset.assetEdit;
+    if (edit.startsWith("subject-")) {
+      field.dataset.assetIds.split(",").filter(Boolean).forEach((assetId) => {
+        const update = updates.get(assetId) || {};
+        if (edit === "subject-name") {
+          update.name = field.value;
+          update.personName = field.value;
+          update.kind = "subject";
+        }
+        if (edit === "subject-notes") {
+          update.notes = field.value;
+          update.kind = "subject";
+        }
+        updates.set(assetId, update);
+      });
+      return;
+    }
+    const assetId = field.dataset.assetId;
+    if (!assetId) return;
+    const update = updates.get(assetId) || {};
+    if (edit === "material-name") update.name = field.value;
+    if (edit === "material-notes") update.notes = field.value;
+    update.kind = "material";
+    updates.set(assetId, update);
+  });
+  for (const [assetId, update] of updates) {
+    await updateAsset(assetId, update);
+  }
 }
 
 async function deleteAsset(assetId, options = {}) {
@@ -1478,7 +1593,7 @@ async function deleteAsset(assetId, options = {}) {
   assetLibrary = result.assets || [];
   if (project) project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
   if (!options.silent) renderAssetLibraryDialog();
-  if (project) renderStoryboard();
+  if (project) renderStoryboard({ preserveScroll: true });
   if (!options.silent) showToast("物料已删除");
 }
 
@@ -1493,6 +1608,8 @@ function openAssetPicker(shotId, stage = "materials") {
       : (stage === "subjects" ? shot?.subjectAssetRefs || [] : shot?.inputAssetRefs || [])));
   const list = document.querySelector("#asset-picker-list");
   list.replaceChildren();
+  assetPickerDialog.classList.toggle("subject-picker-dialog", stage === "subjects");
+  list.classList.toggle("subject-picker-grid", stage === "subjects");
   document.querySelector("#asset-picker-title").textContent =
     stage === "storyboard" ? "选择故事板图" : (stage === "subjects" ? "选择主体参考" : "选择物料图");
   const candidates = stage === "subjects"
@@ -1562,7 +1679,7 @@ function applyAssetPicker() {
   assetPickerDialog.close();
   assetPickerShotId = "";
   assetPickerStage = "materials";
-  renderStoryboard();
+  renderStoryboard({ preserveScroll: true });
   queueSave();
 }
 
@@ -1573,7 +1690,7 @@ function stageInfo(shot, stage) {
       taskId: shot.materialTaskId || "",
       error: shot.materialError || "",
       label: "物料图",
-      action: "生成物料"
+      action: "添加到队列"
     };
   }
   if (stage === "storyboard") {
@@ -1582,7 +1699,7 @@ function stageInfo(shot, stage) {
       taskId: shot.storyboardTaskId || "",
       error: shot.storyboardError || "",
       label: "故事板",
-      action: "生成故事板"
+      action: "添加到队列"
     };
   }
   return {
@@ -1590,7 +1707,7 @@ function stageInfo(shot, stage) {
     taskId: shot.videoTaskId || shot.generationTaskId || "",
     error: shot.videoError || shot.generationError || "",
     label: "视频",
-    action: "生成视频"
+    action: "添加到队列"
   };
 }
 
@@ -1598,7 +1715,6 @@ function stageButtonLabel(shot, stage) {
   const info = stageInfo(shot, stage);
   if (info.status === "pending") return "取消";
   if (info.status === "processing") return "生成中";
-  if (info.status === "ready" || info.status === "failed") return `重生成${info.label}`;
   return info.action;
 }
 
@@ -1725,10 +1841,10 @@ async function cancelGeneration(shot) {
     );
     project = result.project;
     saveStatus.textContent = "已取消生成任务";
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
   } catch (error) {
     project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     if (error.status === 409) {
       saveStatus.textContent = "任务已开始生成";
       showToast("任务已被 Codex 领取，无法取消", "error");
@@ -1768,7 +1884,7 @@ async function queueGeneration(shotIds, force = false, options = {}) {
     saveStatus.textContent = result.queued.length > 0
       ? `已提交 ${result.queued.length} 个生成任务`
       : "任务已在队列或生成中";
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
   } catch (error) {
     saveStatus.textContent = "提交失败";
     showToast(error.message, "error");
@@ -1790,10 +1906,10 @@ async function cancelGenerationBatch(stage, shotIds) {
     saveStatus.textContent = result.canceled.length > 0
       ? `已取消 ${result.canceled.length} 个生成任务`
       : "没有可取消的任务";
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
   } catch (error) {
     project = await api(`/api/projects/${encodeURIComponent(project.id)}`);
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     saveStatus.textContent = "取消失败";
     showToast(error.message, "error");
   }
@@ -1816,7 +1932,7 @@ function startPolling() {
       const remote = await api(`/api/projects/${encodeURIComponent(project.id)}`);
       if (remote.updatedAt !== project.updatedAt) {
         project = remote;
-        renderStoryboard();
+        renderStoryboard({ preserveScroll: true });
       }
     } catch {
       clearInterval(pollTimer);
@@ -1848,7 +1964,7 @@ document.querySelector("#add-shot-bottom").addEventListener("click", addShot);
       method: "PATCH",
       body: JSON.stringify({ [meta.projectField]: project[meta.projectField] })
     });
-    renderStoryboard();
+    renderStoryboard({ preserveScroll: true });
     saveStatus.textContent = "已保存";
   });
 });
@@ -2003,7 +2119,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
-  button.addEventListener("click", () => button.closest("dialog").close());
+  button.addEventListener("click", async () => {
+    const dialog = button.closest("dialog");
+    if (dialog === assetLibraryDialog) await flushAssetLibraryEdits();
+    dialog.close();
+  });
+});
+assetLibraryDialog.addEventListener("cancel", async (event) => {
+  event.preventDefault();
+  await flushAssetLibraryEdits();
+  assetLibraryDialog.close();
 });
 document.addEventListener("pointerdown", (event) => {
   if (!designMenuPopover.hidden && !designMenu.contains(event.target)) closeDesignMenu(true);

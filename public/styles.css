@@ -424,7 +424,7 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1980px;
+  min-width: 1530px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -432,12 +432,12 @@ table {
 .col-index { width: 48px; }
 .col-roll { width: 108px; }
 .col-duration { width: 86px; }
-.col-visual { width: 480px; }
-.col-subjects { width: 180px; }
-.col-materials { width: 260px; }
-.col-storyboard { width: 250px; }
-.col-video { width: 250px; }
-.col-notes { width: 190px; }
+.col-visual { width: 240px; }
+.col-subjects { width: 200px; }
+.col-materials { width: 235px; }
+.col-storyboard { width: 235px; }
+.col-video { width: 235px; }
+.col-notes { width: 95px; }
 .col-actions { width: 48px; }
 
 th {
@@ -457,7 +457,7 @@ th {
 }
 td {
   min-height: 188px;
-  padding: 10px;
+  padding: 12px 10px;
   vertical-align: top;
   border-right: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
@@ -476,9 +476,9 @@ th:last-child, td:last-child { border-right: 0; }
 
 input, textarea {
   width: 100%;
-  border: 1px solid transparent;
+  border: 1px solid var(--line-soft);
   border-radius: 7px;
-  background: transparent;
+  background: color-mix(in srgb, var(--surface-raised) 78%, var(--surface-subtle));
   color: var(--ink);
 }
 select {
@@ -505,28 +505,33 @@ select {
   font-size: 11px;
 }
 .row-config-select {
-  min-height: 32px;
+  min-height: 30px;
   font-size: 11px;
 }
-input { padding: 8px; font-size: 12px; }
+input { padding: 8px 9px; font-size: 12px; }
 textarea {
-  min-height: 164px;
-  padding: 8px 9px;
+  min-height: 154px;
+  padding: 10px 11px;
   resize: vertical;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .visual-prompt-input {
+  min-height: 216px;
   max-height: 520px;
   overflow: auto;
 }
 .notes-input {
+  min-height: 154px;
   max-height: 300px;
   overflow: auto;
 }
-input:hover, textarea:hover { background: var(--surface-hover); }
+input:hover, textarea:hover {
+  border-color: var(--control-border);
+  background: var(--surface-hover);
+}
 input:focus-visible, textarea:focus-visible {
   outline: 0;
   border-color: var(--accent);
@@ -630,20 +635,25 @@ input:focus-visible, textarea:focus-visible {
 
 .stage-product {
   display: grid;
-  gap: 8px;
+  gap: 7px;
+  border-radius: 8px;
+  outline: 0;
+}
+.stage-product:focus-visible {
+  box-shadow: 0 0 0 3px var(--focus);
 }
 .stage-config-cell {
   min-height: 32px;
 }
 .preview-stack { display: flex; flex-direction: column; gap: 8px; }
 .preview-slot {
-  min-height: 158px;
+  min-height: 148px;
   display: grid;
   place-items: center;
 }
 .stage-output-list {
   width: 100%;
-  max-height: 158px;
+  max-height: 148px;
   overflow: auto;
   display: grid;
   gap: 8px;
@@ -678,7 +688,7 @@ input:focus-visible, textarea:focus-visible {
 }
 .preview-frame.portrait-preview {
   width: auto;
-  height: 158px;
+  height: 148px;
   max-width: 100%;
 }
 .preview {
@@ -903,6 +913,11 @@ input:focus-visible, textarea:focus-visible {
 .asset-picker-list {
   max-height: 320px;
 }
+.asset-picker-list.subject-picker-grid {
+  max-height: min(62vh, 620px);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  align-items: stretch;
+}
 .asset-library-section {
   display: grid;
   gap: 10px;
@@ -993,6 +1008,30 @@ input:focus-visible, textarea:focus-visible {
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   background: var(--paper);
+}
+.subject-picker-grid .asset-picker-option {
+  min-height: 136px;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto 1fr;
+  align-content: start;
+  justify-items: start;
+  gap: 10px;
+  padding: 12px;
+}
+.subject-picker-grid .asset-picker-option input {
+  grid-column: 1;
+  grid-row: 1;
+}
+.subject-picker-grid .asset-picker-option .asset-thumb {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 92px;
+  height: 92px;
+}
+.subject-picker-grid .asset-picker-option .asset-meta {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
 }
 .settings-actions {
   display: flex;
@@ -1115,6 +1154,12 @@ input:focus-visible, textarea:focus-visible {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 16px;
+}
+#asset-picker-dialog.subject-picker-dialog {
+  width: min(920px, calc(100vw - 32px));
+}
+#asset-picker-dialog.subject-picker-dialog form {
+  max-height: min(82vh, 760px);
 }
 #settings-dialog form {
   max-height: min(88vh, 900px);
@@ -1339,8 +1384,10 @@ input:focus-visible, textarea:focus-visible {
   position: fixed;
   left: 50%;
   bottom: 24px;
+  width: min(760px, calc(100vw - 56px));
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 18px;
   padding: 9px 10px 9px 16px;
   border: 1px solid rgba(255,255,255,.16);
@@ -1350,6 +1397,26 @@ input:focus-visible, textarea:focus-visible {
   font-size: 12px;
   transform: translateX(-50%);
   backdrop-filter: blur(12px);
+}
+#lightbox-caption {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.lightbox-caption-label,
+.lightbox-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lightbox-caption-label {
+  font-weight: 680;
+}
+.lightbox-file-name {
+  color: rgba(233, 237, 240, .72);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
 }
 .lightbox-upload { padding: 8px 12px; border-radius: 7px; background: #fff; color: #252b31; font-size: 12px; font-weight: 650; }
 .lightbox-open { overflow: hidden; }

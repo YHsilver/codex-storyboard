@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile
@@ -24,6 +25,7 @@ const legacyDataFile = join(dataDir, "storyboard.json");
 const legacyMediaDir = join(dataDir, "media");
 const port = Number(process.env.PORT || 43218);
 let generationMutationQueue = Promise.resolve();
+let assetLibraryMutationQueue = Promise.resolve();
 
 const aspectRatios = {
   "9:16": { width: 1080, height: 1920 },
@@ -525,8 +527,26 @@ async function saveAssetLibrary(library) {
   const next = {
     assets: Array.isArray(library.assets) ? library.assets.map(normalizeAsset) : []
   };
-  await writeFile(assetLibraryFile, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  const tempFile = `${assetLibraryFile}.${process.pid}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tempFile, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await rename(tempFile, assetLibraryFile);
   return next;
+}
+
+function mutateAssetLibrary(callback) {
+  const mutation = assetLibraryMutationQueue.then(async () => {
+    const library = await readAssetLibrary();
+    const result = await callback(library);
+    const saved = await saveAssetLibrary(library);
+    return result ?? saved;
+  }, async () => {
+    const library = await readAssetLibrary();
+    const result = await callback(library);
+    const saved = await saveAssetLibrary(library);
+    return result ?? saved;
+  });
+  assetLibraryMutationQueue = mutation.catch(() => {});
+  return mutation;
 }
 
 function mediaUrl(projectId, fileName) {
@@ -853,6 +873,22 @@ function stageSelfUrls(shot, stage) {
   return [];
 }
 
+function inputAssetDedupeKey(asset) {
+  if (asset.path) return `path:${resolve(String(asset.path))}`;
+  if (asset.url) return `url:${String(asset.url).split("#")[0]}`;
+  return `id:${asset.id}`;
+}
+
+function uniqueInputAssets(inputAssets) {
+  const seen = new Set();
+  return inputAssets.filter((asset) => {
+    const key = inputAssetDedupeKey(asset);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function generationTask(project, shot, stage = "video") {
   const settings = await readSettings();
   const modelConfig = resolveModelConfig(settings, project, shot, stage);
@@ -909,8 +945,9 @@ async function generationTask(project, shot, stage = "video") {
       });
     });
   }
+  const uniqueAssets = uniqueInputAssets(inputAssets);
   let imageIndex = 0;
-  inputAssets.forEach((asset) => {
+  uniqueAssets.forEach((asset) => {
     if (asset.type !== "image") return;
     imageIndex += 1;
     asset.imageLabel = `[图${imageIndex}]`;
@@ -943,7 +980,7 @@ async function generationTask(project, shot, stage = "video") {
     configKey: modelConfig.key,
     configName: modelConfig.name,
     visualPrompt: shot.visualPrompt,
-    compiledPrompt: buildStagePrompt(shot, modelConfig, stage, inputAssets, project, library.assets),
+    compiledPrompt: buildStagePrompt(shot, modelConfig, stage, uniqueAssets, project, library.assets),
     promptTemplates: {
       fixedPrefix: modelConfig.prompt,
       promptPrefix: modelConfig.prompt,
@@ -951,15 +988,15 @@ async function generationTask(project, shot, stage = "video") {
     },
     promptPrefix: modelConfig.prompt,
     referenceTemplate: modelConfig.referenceTemplate,
-    inputAssets,
+    inputAssets: uniqueAssets,
     inputAssetRefs: shot.inputAssetRefs,
     subjectAssetRefs,
-    subjectAssets: inputAssets.filter((asset) => asset.kind === "subject"),
+    subjectAssets: uniqueAssets.filter((asset) => asset.kind === "subject"),
     materialAssetRefs: shot.materialAssetRefs,
     storyboardUrl: shot.storyboardUrl,
     storyboardAssetRef: shot.storyboardAssetRef,
     autoAssetRefs: [],
-    generatorConfig: buildGeneratorConfig(shot, modelConfig, project, inputAssets, stage),
+    generatorConfig: buildGeneratorConfig(shot, modelConfig, project, uniqueAssets, stage),
     videoConfirmedAt: shot.videoConfirmedAt,
     jimengSubmitId: shot.jimengSubmitId,
     notes: shot.notes,
@@ -1014,9 +1051,9 @@ async function copyGeneratedAssetToLibrary(project, shot, sourcePath, body = {})
     usage: body.usage || "shot-material",
     autoReference: body.autoReference !== false
   });
-  const library = await readAssetLibrary();
-  library.assets.unshift(asset);
-  await saveAssetLibrary(library);
+  await mutateAssetLibrary((library) => {
+    library.assets.unshift(asset);
+  });
   shot.materialAssetRefs = uniqueStrings([...shot.materialAssetRefs, asset.id]);
   return asset;
 }
@@ -1159,15 +1196,13 @@ async function saveUploadedAsset(request) {
     kind: fields.kind || fields.assetKind || "",
     autoReference: fields.autoReference !== "false"
   });
-  const library = await readAssetLibrary();
-  library.assets.unshift(asset);
-  await saveAssetLibrary(library);
+  await mutateAssetLibrary((library) => {
+    library.assets.unshift(asset);
+  });
   return asset;
 }
 
 async function deleteMaterialAssetFromShot(shot, assetId) {
-  const library = await readAssetLibrary();
-  const asset = library.assets.find((item) => item.id === assetId);
   shot.materialAssetRefs = shot.materialAssetRefs.filter((id) => id !== assetId);
   shot.inputAssetRefs = shot.inputAssetRefs.filter((id) => id !== assetId);
   if (shot.materialAssetRefs.length === 0) {
@@ -1178,11 +1213,12 @@ async function deleteMaterialAssetFromShot(shot, assetId) {
     shot.materialStartedAt = null;
     shot.materialCompletedAt = null;
   }
-  if (asset?.usage === "shot-material") {
+  await mutateAssetLibrary(async (library) => {
+    const asset = library.assets.find((item) => item.id === assetId);
+    if (asset?.usage !== "shot-material") return;
     library.assets = library.assets.filter((item) => item.id !== assetId);
     if (asset.fileName) await rm(join(assetFilesDir, asset.fileName), { force: true });
-    await saveAssetLibrary(library);
-  }
+  });
 }
 
 async function deleteStageMedia(project, shot, stage, assetId = "") {
@@ -1611,30 +1647,45 @@ async function handleAssetsApi(request, response, url) {
   const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
   if (!assetMatch) return false;
   const assetId = decodeURIComponent(assetMatch[1]);
-  const library = await readAssetLibrary();
-  const index = library.assets.findIndex((asset) => asset.id === assetId);
-  if (index < 0) return sendError(response, 404, "Asset not found");
 
   if (request.method === "PATCH") {
     const body = await readBody(request);
-    library.assets[index] = normalizeAsset({
-      ...library.assets[index],
-      name: body.name ?? library.assets[index].name,
-      personName: body.personName ?? library.assets[index].personName,
-      aliases: body.aliases ?? library.assets[index].aliases,
-      tags: body.tags ?? library.assets[index].tags,
-      notes: body.notes ?? body.remark ?? library.assets[index].notes,
-      usage: body.usage ?? library.assets[index].usage,
-      kind: body.kind ?? body.assetKind ?? library.assets[index].kind,
-      isSubject: body.isSubject ?? library.assets[index].isSubject,
-      autoReference: body.autoReference ?? library.assets[index].autoReference,
-      updatedAt: new Date().toISOString()
-    });
-    return sendJson(response, 200, await saveAssetLibrary(library));
+    try {
+      const saved = await mutateAssetLibrary((library) => {
+        const index = library.assets.findIndex((asset) => asset.id === assetId);
+        if (index < 0) throw Object.assign(new Error("Asset not found"), { status: 404 });
+        library.assets[index] = normalizeAsset({
+          ...library.assets[index],
+          name: body.name ?? library.assets[index].name,
+          personName: body.personName ?? library.assets[index].personName,
+          aliases: body.aliases ?? library.assets[index].aliases,
+          tags: body.tags ?? library.assets[index].tags,
+          notes: body.notes ?? body.remark ?? library.assets[index].notes,
+          usage: body.usage ?? library.assets[index].usage,
+          kind: body.kind ?? body.assetKind ?? library.assets[index].kind,
+          isSubject: body.isSubject ?? library.assets[index].isSubject,
+          autoReference: body.autoReference ?? library.assets[index].autoReference,
+          updatedAt: new Date().toISOString()
+        });
+      });
+      return sendJson(response, 200, saved);
+    } catch (error) {
+      return sendError(response, error.status || 500, error.message);
+    }
   }
 
   if (request.method === "DELETE") {
-    const [asset] = library.assets.splice(index, 1);
+    let asset = null;
+    let savedLibrary = null;
+    try {
+      savedLibrary = await mutateAssetLibrary((library) => {
+        const index = library.assets.findIndex((item) => item.id === assetId);
+        if (index < 0) throw Object.assign(new Error("Asset not found"), { status: 404 });
+        [asset] = library.assets.splice(index, 1);
+      });
+    } catch (error) {
+      return sendError(response, error.status || 500, error.message);
+    }
     if (asset.fileName) await rm(join(assetFilesDir, asset.fileName), { force: true });
     const projectsIndex = await readProjectsIndex();
     for (const record of projectsIndex.projects) {
@@ -1665,7 +1716,7 @@ async function handleAssetsApi(request, response, url) {
       }
       if (changed) await saveProject(project);
     }
-    return sendJson(response, 200, await saveAssetLibrary(library));
+    return sendJson(response, 200, savedLibrary);
   }
 
   return false;
