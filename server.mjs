@@ -1202,7 +1202,25 @@ async function saveUploadedAsset(request) {
   return asset;
 }
 
-async function deleteMaterialAssetFromShot(shot, assetId) {
+function shotReferencesAsset(shot, assetId) {
+  return shot.inputAssetRefs.includes(assetId) ||
+    shot.subjectAssetRefs.includes(assetId) ||
+    shot.materialAssetRefs.includes(assetId) ||
+    shot.storyboardAssetRef === assetId;
+}
+
+async function generatedAssetHasRefs(project, assetId) {
+  if (project.shots.some((shot) => shotReferencesAsset(shot, assetId))) return true;
+  const index = await readProjectsIndex();
+  for (const record of index.projects) {
+    if (record.id === project.id) continue;
+    const candidate = await readProject(record.id);
+    if (candidate.shots.some((shot) => shotReferencesAsset(shot, assetId))) return true;
+  }
+  return false;
+}
+
+async function deleteMaterialAssetFromShot(project, shot, assetId) {
   shot.materialAssetRefs = shot.materialAssetRefs.filter((id) => id !== assetId);
   shot.inputAssetRefs = shot.inputAssetRefs.filter((id) => id !== assetId);
   if (shot.materialAssetRefs.length === 0) {
@@ -1216,6 +1234,7 @@ async function deleteMaterialAssetFromShot(shot, assetId) {
   await mutateAssetLibrary(async (library) => {
     const asset = library.assets.find((item) => item.id === assetId);
     if (asset?.usage !== "shot-material") return;
+    if (await generatedAssetHasRefs(project, assetId)) return;
     library.assets = library.assets.filter((item) => item.id !== assetId);
     if (asset.fileName) await rm(join(assetFilesDir, asset.fileName), { force: true });
   });
@@ -1225,7 +1244,7 @@ async function deleteStageMedia(project, shot, stage, assetId = "") {
   if (stage === "materials") {
     if (shot.materialStatus === "processing") throw Object.assign(new Error("生成中的物料图暂时无法删除"), { status: 409 });
     const targetIds = assetId ? [assetId] : [...shot.materialAssetRefs];
-    for (const id of targetIds) await deleteMaterialAssetFromShot(shot, id);
+    for (const id of targetIds) await deleteMaterialAssetFromShot(project, shot, id);
     return;
   }
   if (stage === "storyboard") {

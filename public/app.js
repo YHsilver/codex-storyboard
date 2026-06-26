@@ -70,6 +70,30 @@ let assetUploadKind = "material";
 let assetUploadMeta = {};
 let videoConfirmShotId = "";
 let videoConfirmShotIds = [];
+let dirtyShotVersion = 0;
+const dirtyShotFields = new Map();
+
+function markShotDirty(shot, fields) {
+  if (!shot?.id) return;
+  const names = Array.isArray(fields) ? fields : [fields];
+  const dirty = dirtyShotFields.get(shot.id) || new Map();
+  names.filter(Boolean).forEach((field) => {
+    dirtyShotVersion += 1;
+    dirty.set(field, dirtyShotVersion);
+  });
+  dirtyShotFields.set(shot.id, dirty);
+}
+
+function clearSavedShotDirty(snapshot) {
+  snapshot.forEach((fields, shotId) => {
+    const dirty = dirtyShotFields.get(shotId);
+    if (!dirty) return;
+    fields.forEach((version, field) => {
+      if (dirty.get(field) === version) dirty.delete(field);
+    });
+    if (dirty.size === 0) dirtyShotFields.delete(shotId);
+  });
+}
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -352,6 +376,7 @@ async function loadProject(projectId) {
       loadSettingsAndAssets()
     ]);
     project = loadedProject;
+    dirtyShotFields.clear();
     if (project) renderStoryboard();
     startPolling();
   } catch (error) {
@@ -504,6 +529,7 @@ function renderStageProduct(container, shot, index, stage) {
   configWrap.className = "stage-config-cell";
   renderNativeConfigSelect(configWrap, shot[meta.shotField] || "", (nextValue) => {
     shot[meta.shotField] = nextValue;
+    markShotDirty(shot, meta.shotField);
     queueSave();
   }, { includeProjectDefault: true, label: `${stageInfo(shot, stage).label}模型配置`, mediaType: meta.mediaType });
 
@@ -708,6 +734,7 @@ function renderAssetRefs(container, shot) {
     remove.addEventListener("click", () => {
       shot.inputAssetRefs = refs.filter((id) => id !== assetId);
       renderAssetRefs(container, shot);
+      markShotDirty(shot, "inputAssetRefs");
       queueSave();
     });
     item.append(renderAssetThumb(asset), meta, remove);
@@ -756,6 +783,7 @@ function renderSubjectRefs(container, shot) {
     remove.addEventListener("click", () => {
       shot.subjectAssetRefs = refs.filter((id) => !group.ids.includes(id));
       renderSubjectRefs(container, shot);
+      markShotDirty(shot, "subjectAssetRefs");
       queueSave();
     });
     item.append(renderSubjectThumb(group), meta, remove);
@@ -819,6 +847,7 @@ async function uploadAsset(file) {
           ? (subjectGroupForAsset(result.asset.id)?.ids || [result.asset.id])
           : [result.asset.id];
         shot[field] = [...new Set([...(shot[field] || []), ...ids])];
+        markShotDirty(shot, field);
         queueSave();
       }
     }
@@ -1101,11 +1130,40 @@ async function flushSave() {
 
 async function saveProject() {
   try {
-    const saved = await api(`/api/projects/${encodeURIComponent(project.id)}`, {
-      method: "PUT",
-      body: JSON.stringify(project)
-    });
-    project.updatedAt = saved.updatedAt;
+    const dirtySnapshot = new Map(
+      [...dirtyShotFields].map(([shotId, fields]) => [shotId, new Map(fields)])
+    );
+    if (dirtySnapshot.size === 0) {
+      saveStatus.textContent = "已保存";
+      return;
+    }
+    for (const [shotId, fields] of dirtySnapshot) {
+      const localShot = project.shots.find((shot) => shot.id === shotId);
+      if (!localShot) continue;
+      const patch = {};
+      fields.forEach((_version, field) => {
+        patch[field] = Array.isArray(localShot[field]) ? [...localShot[field]] : localShot[field];
+      });
+      const saved = await api(
+        `/api/projects/${encodeURIComponent(project.id)}/shots/${encodeURIComponent(shotId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(patch)
+        }
+      );
+      project.updatedAt = saved.updatedAt;
+      const savedShots = new Map(saved.shots.map((shot) => [shot.id, shot]));
+      project.shots.forEach((shot) => {
+        const savedShot = savedShots.get(shot.id);
+        if (!savedShot) return;
+        const stillDirty = dirtyShotFields.get(shot.id);
+        Object.entries(savedShot).forEach(([field, value]) => {
+          if (stillDirty?.has(field)) return;
+          shot[field] = value;
+        });
+      });
+      clearSavedShotDirty(new Map([[shotId, fields]]));
+    }
     saveStatus.textContent = "已保存";
   } catch (error) {
     saveStatus.textContent = "保存失败";
@@ -1139,6 +1197,7 @@ function renderStoryboard(options = {}) {
       }
       control.addEventListener("input", () => {
         shot[field] = field === "duration" ? Number(control.value) : control.value;
+        markShotDirty(shot, field);
         if (control.tagName === "TEXTAREA") resizeTextarea(control);
         updateSummary();
         if (field === "visualPrompt") {
@@ -1154,6 +1213,7 @@ function renderStoryboard(options = {}) {
     row.querySelectorAll("[data-select-field]").forEach((container) => {
       const field = container.dataset.selectField;
       renderSelect(container, field, shot, (changedField) => {
+        markShotDirty(shot, changedField);
         queueSave();
       });
     });
@@ -1676,6 +1736,13 @@ function applyAssetPicker() {
   } else {
     shot.inputAssetRefs = selected;
   }
+  markShotDirty(shot, assetPickerStage === "storyboard"
+    ? ["storyboardAssetRef", "storyboardUrl", "storyboardUrls", "storyboardStatus", "storyboardTaskId", "storyboardError", "storyboardCompletedAt"]
+    : assetPickerStage === "materials"
+      ? ["materialAssetRefs", "materialStatus", "materialTaskId", "materialError", "materialCompletedAt"]
+      : assetPickerStage === "subjects"
+        ? "subjectAssetRefs"
+        : "inputAssetRefs");
   assetPickerDialog.close();
   assetPickerShotId = "";
   assetPickerStage = "materials";
