@@ -546,7 +546,7 @@ async function callTool(id, params) {
     const summary = result.tasks.length === 0
       ? "No matching storyboard generation tasks."
       : result.tasks
-          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
+          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.imageLabel || asset.usage || "ref"} ${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
           .join("\n\n");
     sendResult(id, {
       content: [{ type: "text", text: summary }],

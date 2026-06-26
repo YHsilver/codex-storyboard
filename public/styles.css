@@ -424,7 +424,7 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1860px;
+  min-width: 1980px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -432,7 +432,7 @@ table {
 .col-index { width: 48px; }
 .col-roll { width: 108px; }
 .col-duration { width: 86px; }
-.col-visual { width: 360px; }
+.col-visual { width: 480px; }
 .col-subjects { width: 180px; }
 .col-materials { width: 260px; }
 .col-storyboard { width: 250px; }
@@ -456,7 +456,7 @@ th {
   white-space: nowrap;
 }
 td {
-  height: 188px;
+  min-height: 188px;
   padding: 10px;
   vertical-align: top;
   border-right: 1px solid var(--line-soft);
@@ -510,12 +510,21 @@ select {
 }
 input { padding: 8px; font-size: 12px; }
 textarea {
-  height: 164px;
+  min-height: 164px;
   padding: 8px 9px;
-  resize: none;
+  resize: vertical;
   font-size: 13px;
   line-height: 1.6;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.visual-prompt-input {
+  max-height: 520px;
+  overflow: auto;
+}
+.notes-input {
+  max-height: 300px;
+  overflow: auto;
 }
 input:hover, textarea:hover { background: var(--surface-hover); }
 input:focus-visible, textarea:focus-visible {
@@ -844,6 +853,13 @@ input:focus-visible, textarea:focus-visible {
   height: 100%;
   object-fit: cover;
 }
+.asset-thumb-preview {
+  cursor: zoom-in;
+}
+.asset-thumb-preview:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .asset-meta {
   min-width: 0;
   display: grid;
@@ -944,6 +960,10 @@ input:focus-visible, textarea:focus-visible {
   white-space: nowrap;
   text-align: center;
 }
+.subject-audio-box audio {
+  width: 100%;
+  height: 30px;
+}
 .subject-audio-box button {
   width: 100%;
 }
@@ -996,6 +1016,7 @@ input:focus-visible, textarea:focus-visible {
   gap: 10px;
 }
 .compact-textarea {
+  min-height: 78px;
   height: 78px;
   border-color: var(--line-soft);
   background: var(--surface-subtle);
@@ -1266,13 +1287,24 @@ input:focus-visible, textarea:focus-visible {
 .lightbox {
   position: fixed;
   inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
   z-index: var(--z-lightbox);
   display: grid;
   place-items: center;
   padding: 72px 48px 92px;
+  border: 0;
   background: rgba(13, 16, 19, .78);
   backdrop-filter: blur(9px);
   animation: lightbox-in 160ms ease-out;
+}
+.lightbox:not([open]) {
+  display: none;
+}
+.lightbox::backdrop {
+  background: transparent;
 }
 .lightbox-stage {
   width: 100%;

@@ -35,6 +35,7 @@ const aspectRatios = {
 
 const generationStages = ["materials", "storyboard", "video"];
 const generationStatuses = ["idle", "pending", "processing", "ready", "failed"];
+const generationBatchSize = 5;
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -201,6 +202,15 @@ function uniqueStrings(values) {
 
 function removeString(values, value) {
   return uniqueStrings(values).filter((item) => item !== value);
+}
+
+async function mapInBatches(items, size, callback) {
+  const results = [];
+  for (let index = 0; index < items.length; index += size) {
+    const batch = items.slice(index, index + size);
+    results.push(...await Promise.all(batch.map(callback)));
+  }
+  return results;
 }
 
 function normalizeModelConfig(config = {}, fallback = defaultSettings.modelConfigs[0]) {
@@ -545,23 +555,34 @@ async function projectSummary(record) {
   };
 }
 
-function assetSearchTerms(asset) {
-  return uniqueStrings([
-    asset.name,
-    asset.personName,
-    ...asset.aliases,
-    ...asset.tags
-  ]);
+async function projectSequence(project) {
+  const index = await readProjectsIndex();
+  const position = index.projects.findIndex((item) => item.id === project.id);
+  return position >= 0 ? position + 1 : index.projects.length + 1;
 }
 
-function autoReferencedAssetIds(shot, assets) {
-  const prompt = `${shot.visualPrompt} ${shot.notes}`.toLocaleLowerCase();
-  if (!prompt.trim()) return [];
-  return assets
-    .filter((asset) => asset.autoReference)
-    .filter((asset) => assetSearchTerms(asset)
-      .some((term) => term && prompt.includes(term.toLocaleLowerCase())))
-    .map((asset) => asset.id);
+function shotSequence(project, shot) {
+  const position = project.shots.findIndex((item) => item.id === shot.id);
+  return position >= 0 ? position + 1 : project.shots.length + 1;
+}
+
+function generationFileStem(projectNumber, shotNumber, stage, index) {
+  const projectPart = String(projectNumber).padStart(3, "0");
+  const shotPart = String(shotNumber).padStart(3, "0");
+  const stagePart = stage === "materials" ? "m" : stage === "storyboard" ? "s" : "v";
+  return `p${projectPart}-c${shotPart}-${stagePart}${index}`;
+}
+
+async function nextGeneratedFileName(directory, project, shot, stage, extension) {
+  await mkdir(directory, { recursive: true });
+  const projectNumber = await projectSequence(project);
+  const shotNumber = shotSequence(project, shot);
+  const files = new Set(await readdir(directory).catch(() => []));
+  let index = 1;
+  while (files.has(`${generationFileStem(projectNumber, shotNumber, stage, index)}${extension}`)) {
+    index += 1;
+  }
+  return `${generationFileStem(projectNumber, shotNumber, stage, index)}${extension}`;
 }
 
 function subjectAssetKey(asset) {
@@ -591,11 +612,10 @@ function stageSelfAssetIds(shot, stage) {
   return [];
 }
 
-function stageReferenceAssetIds(shot, subjectAssetRefs, automaticRefs, stage) {
+function stageReferenceAssetIds(shot, subjectAssetRefs, stage) {
   const refs = [
     ...shot.inputAssetRefs,
-    ...subjectAssetRefs,
-    ...automaticRefs
+    ...subjectAssetRefs
   ];
   if (stage === "storyboard" || stage === "video") {
     refs.push(...shot.materialAssetRefs);
@@ -628,10 +648,121 @@ function resolveModelConfig(settings, project, shot, stage = "video") {
     settings.modelConfigs[0];
 }
 
-function compilePrompt(shot, config) {
-  const prompt = shot.visualPrompt.trim();
-  const prefix = String(config.prompt || "").trim();
-  return prefix ? `${prefix}\n\n${prompt}` : prompt;
+function assetText(asset) {
+  return [
+    asset?.name,
+    asset?.usage,
+    asset?.personName,
+    asset?.notes,
+    ...(asset?.aliases || []),
+    ...(asset?.tags || [])
+  ].join(" ").toLocaleLowerCase();
+}
+
+function isSceneAsset(asset) {
+  if (!asset || asset.type !== "image" || asset.kind === "subject") return false;
+  const text = assetText(asset);
+  return [
+    "场景",
+    "背景",
+    "空镜",
+    "环境",
+    "地点",
+    "scene",
+    "background",
+    "backdrop",
+    "environment",
+    "location",
+    "bg"
+  ].some((term) => text.includes(term));
+}
+
+function materialStageContext(shot, inputAssets = [], libraryAssets = []) {
+  const existingAssets = uniqueStrings([
+    ...shot.inputAssetRefs,
+    ...shot.materialAssetRefs,
+    ...shot.subjectAssetRefs
+  ])
+    .map((assetId) => libraryAssets.find((asset) => asset.id === assetId))
+    .filter(Boolean);
+  const subjectAssets = [
+    ...inputAssets,
+    ...existingAssets
+  ].filter((asset) => asset.kind === "subject" && asset.type === "image");
+  const sceneAssets = [
+    ...inputAssets,
+    ...existingAssets
+  ].filter(isSceneAsset);
+  return {
+    hasSubject: subjectAssets.length > 0,
+    hasScene: sceneAssets.length > 0,
+    subjectNames: uniqueStrings(subjectAssets.map((asset) => asset.name)),
+    sceneNames: uniqueStrings(sceneAssets.map((asset) => asset.name))
+  };
+}
+
+function stagePromptGoal(shot, stage, inputAssets = [], libraryAssets = []) {
+  if (stage === "materials") {
+    if (shot.materialPrompt.trim()) return shot.materialPrompt.trim();
+    const context = materialStageContext(shot, inputAssets, libraryAssets);
+    const rules = [
+      "分析当前分镜只缺哪些物料图。",
+      context.hasSubject
+        ? `当前已有主体参考：${context.subjectNames.join("、") || "已选择主体"}；不要生成任何人物/主体图。`
+        : "当前没有主体参考；如剧情需要固定人物，可生成干净单人主体参考图。",
+      context.hasScene
+        ? `当前已有场景/背景参考：${context.sceneNames.join("、") || "已选择场景"}；不要重复生成场景图。`
+        : "当前缺少场景/背景参考；需要生成一张无人物、无主体、无文字、无水印的场景空镜图，突出地点、光线、氛围和可复用背景。",
+      "除非剧情明确需要且当前没有对应素材，否则不要生成道具或其他额外物料。"
+    ];
+    return rules.join("\n");
+  }
+  if (stage === "storyboard") {
+    return shot.storyboardPrompt.trim() || "基于当前分镜剧情和已选择素材，生成故事板关键镜头图，画面应覆盖剧情关键瞬间、构图明确、可直接作为视频生成参考。";
+  }
+  return "基于当前分镜剧情和已选择素材生成最终视频提示词。必须强烈参考模型配置中的 referenceTemplate：尽量保留模板结构、段落顺序、风格要求和否定控制，只根据当前剧情、素材引用和镜头内容替换占位符并补充必要细节。人物造型、场景、动作和镜头应与引用图片一致。";
+}
+
+function imageReferenceLines(inputAssets) {
+  return inputAssets
+    .filter((asset) => asset.type === "image" && asset.imageLabel)
+    .map((asset) => `${asset.imageLabel} ${asset.name || basename(asset.path || "")} (${asset.usage || "reference"})`)
+    .join("\n");
+}
+
+function buildStagePrompt(shot, config, stage, inputAssets = [], project = null, libraryAssets = []) {
+  const promptPrefix = String(config.prompt || "").trim();
+  const referenceTemplate = String(config.referenceTemplate || "").trim();
+  const references = imageReferenceLines(inputAssets) || "无图片引用。";
+  return [
+    "请根据以下信息生成真正提交给生成 API 的最终 prompt。",
+    "要求：",
+    "- 最终 prompt 必须由你重新组织和润色，不要机械照抄参考模板。",
+    "- 如果存在 prompt-prefix，必须原样放在最终 prompt 的最前面。",
+    "- referenceTemplate 是强烈推荐的参考格式；请按剧情改写内容、处理占位符、补充必要描述，并删除不适用段落。",
+    stage === "video" ? "- 视频阶段必须强烈参考 referenceTemplate，尽量保持模板结构、段落顺序、风格要求和否定控制；主要改动应是填入当前剧情、镜头细节和 [图1] 引用。" : "",
+    "- 引用图片时必须使用 [图1]、[图2] 这类编号，编号必须与 inputAssets 顺序一致。",
+    "- 不要读取图片文件内容；只根据文件名、素材名、usage、编号和分镜文本判断素材用途。",
+    "",
+    `项目：${project?.title || ""}`,
+    `阶段：${stage}`,
+    `阶段目标：${stagePromptGoal(shot, stage, inputAssets, libraryAssets)}`,
+    "",
+    "prompt-prefix：",
+    promptPrefix || "无",
+    "",
+    "referenceTemplate：",
+    referenceTemplate || "无",
+    "",
+    "当前分镜剧情：",
+    shot.visualPrompt.trim(),
+    "",
+    "图片引用：",
+    references,
+    "",
+    "备注：",
+    shot.notes.trim() || "无"
+  ].join("\n");
 }
 
 function stageStatus(shot, stage) {
@@ -687,19 +818,6 @@ function setStagePending(shot, stage) {
   shot.videoConfirmedAt = now;
 }
 
-function buildStagePrompt(shot, config, stage) {
-  const base = compilePrompt(shot, config);
-  if (stage === "materials") {
-    const extra = shot.materialPrompt.trim() || "分析画面内容需要的人物与场景参考图，生成缺失的关键物料图片，物料图应干净、主体明确、方便后续作为视频参考。";
-    return `${extra}\n\n分镜内容：\n${base}`;
-  }
-  if (stage === "storyboard") {
-    const extra = shot.storyboardPrompt.trim() || "基于已有人物、场景物料生成故事板关键镜头图，画面应覆盖剧情关键瞬间、构图明确、可直接作为视频生成参考。";
-    return `${extra}\n\n分镜内容：\n${base}`;
-  }
-  return base;
-}
-
 function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "video") {
   if (config.provider === "image-gen" && stage !== "video") {
     return {
@@ -739,9 +857,8 @@ async function generationTask(project, shot, stage = "video") {
   const settings = await readSettings();
   const modelConfig = resolveModelConfig(settings, project, shot, stage);
   const library = await readAssetLibrary();
-  const automaticRefs = autoReferencedAssetIds(shot, library.assets);
   const subjectAssetRefs = expandSubjectAssetRefs(shot.subjectAssetRefs, library.assets);
-  const inputAssetIds = stageReferenceAssetIds(shot, subjectAssetRefs, automaticRefs, stage);
+  const inputAssetIds = stageReferenceAssetIds(shot, subjectAssetRefs, stage);
   const inputAssets = inputAssetIds
     .map((assetId) => library.assets.find((asset) => asset.id === assetId))
     .filter(Boolean)
@@ -758,7 +875,7 @@ async function generationTask(project, shot, stage = "video") {
       usage: asset.kind === "subject"
         ? (asset.type === "audio" ? "subject-audio" : "subject-image")
         : asset.usage,
-      autoReferenced: automaticRefs.includes(asset.id) && !shot.inputAssetRefs.includes(asset.id)
+      autoReferenced: false
     }));
   if (stage === "video") {
     if (shot.storyboardAssetRef) {
@@ -792,6 +909,12 @@ async function generationTask(project, shot, stage = "video") {
       });
     });
   }
+  let imageIndex = 0;
+  inputAssets.forEach((asset) => {
+    if (asset.type !== "image") return;
+    imageIndex += 1;
+    asset.imageLabel = `[图${imageIndex}]`;
+  });
   const dimensions = aspectRatios[project.aspectRatio];
   const taskId = stageTaskId(shot, stage);
   const taskOutputDir = resolve(rootDir, "generation", project.id, taskId);
@@ -820,11 +943,14 @@ async function generationTask(project, shot, stage = "video") {
     configKey: modelConfig.key,
     configName: modelConfig.name,
     visualPrompt: shot.visualPrompt,
-    compiledPrompt: buildStagePrompt(shot, modelConfig, stage),
+    compiledPrompt: buildStagePrompt(shot, modelConfig, stage, inputAssets, project, library.assets),
     promptTemplates: {
       fixedPrefix: modelConfig.prompt,
+      promptPrefix: modelConfig.prompt,
       referenceTemplate: modelConfig.referenceTemplate
     },
+    promptPrefix: modelConfig.prompt,
+    referenceTemplate: modelConfig.referenceTemplate,
     inputAssets,
     inputAssetRefs: shot.inputAssetRefs,
     subjectAssetRefs,
@@ -832,7 +958,7 @@ async function generationTask(project, shot, stage = "video") {
     materialAssetRefs: shot.materialAssetRefs,
     storyboardUrl: shot.storyboardUrl,
     storyboardAssetRef: shot.storyboardAssetRef,
-    autoAssetRefs: automaticRefs,
+    autoAssetRefs: [],
     generatorConfig: buildGeneratorConfig(shot, modelConfig, project, inputAssets, stage),
     videoConfirmedAt: shot.videoConfirmedAt,
     jimengSubmitId: shot.jimengSubmitId,
@@ -853,7 +979,7 @@ async function attachMedia(project, shot, sourcePath) {
   await stat(resolvedSource);
   const extension = extname(resolvedSource).toLowerCase();
   if (!isVideoExtension(extension)) throw new Error("最终产物只支持视频文件");
-  const fileName = `${shot.id}-${Date.now()}${extension}`;
+  const fileName = await nextGeneratedFileName(projectMediaDir(project.id), project, shot, "video", extension);
   await copyFile(resolvedSource, join(projectMediaDir(project.id), fileName));
   const url = mediaUrl(project.id, fileName);
   shot.mediaUrl = url;
@@ -867,17 +993,18 @@ async function attachMedia(project, shot, sourcePath) {
   shot.videoCompletedAt = shot.generationCompletedAt;
 }
 
-async function copyGeneratedAssetToLibrary(sourcePath, shot, body = {}) {
+async function copyGeneratedAssetToLibrary(project, shot, sourcePath, body = {}) {
   const resolvedSource = resolve(String(sourcePath));
   await stat(resolvedSource);
   const extension = extname(resolvedSource).toLowerCase();
   const id = createId("asset");
-  const fileName = `${id}${extension}`;
+  const fileName = await nextGeneratedFileName(assetFilesDir, project, shot, "materials", extension);
   await copyFile(resolvedSource, join(assetFilesDir, fileName));
+  const assetStem = fileName.slice(0, -extension.length);
   const asset = normalizeAsset({
     id,
     type: "image",
-    name: body.assetName || body.name || `${shot.id} 物料图`,
+    name: body.assetName || body.name || `${assetStem} 物料图`,
     fileName,
     url: assetUrl(fileName),
     mimeType: contentTypes[extension] || "image/*",
@@ -898,7 +1025,7 @@ async function attachStoryboard(project, shot, sourcePath) {
   const resolvedSource = resolve(String(sourcePath));
   await stat(resolvedSource);
   const extension = extname(resolvedSource).toLowerCase();
-  const fileName = `${shot.id}-storyboard-${Date.now()}${extension}`;
+  const fileName = await nextGeneratedFileName(projectMediaDir(project.id), project, shot, "storyboard", extension);
   await copyFile(resolvedSource, join(projectMediaDir(project.id), fileName));
   const url = mediaUrl(project.id, fileName);
   shot.storyboardUrl = url;
@@ -951,11 +1078,11 @@ async function saveUploadedStageMedia(project, shot, stage, request) {
 
   if (stage === "video" && !file.mimeType.startsWith("video/")) throw new Error("最终产物只支持视频文件");
   if (stage !== "video" && !file.mimeType.startsWith("image/")) throw new Error("物料图和故事板只支持图片文件");
-  const fileName = `${shot.id}-${Date.now()}${extension}`;
+  const fileName = await nextGeneratedFileName(projectMediaDir(project.id), project, shot, stage, extension);
   await writeFile(join(projectMediaDir(project.id), fileName), file.content);
   const sourcePath = join(projectMediaDir(project.id), fileName);
   if (stage === "materials") {
-    const asset = await copyGeneratedAssetToLibrary(sourcePath, shot, {
+    const asset = await copyGeneratedAssetToLibrary(project, shot, sourcePath, {
       assetName: fields.name || file.filename.replace(/\.[^.]+$/, ""),
       usage: "shot-material",
       autoReference: false
@@ -1399,7 +1526,7 @@ async function handleShotsApi(request, response, url) {
         const body = await readBody(request);
         if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
         if (stage === "materials") {
-          await copyGeneratedAssetToLibrary(body.sourcePath, shot, body);
+          await copyGeneratedAssetToLibrary(project, shot, body.sourcePath, body);
           shot.materialStatus = "ready";
           shot.materialTaskId = "";
           shot.materialError = "";
@@ -1582,7 +1709,7 @@ async function handleGenerationApi(request, response, url) {
       }
     }
     const force = body.force === true;
-    const queued = [];
+    const queuedShots = [];
     const skipped = [];
 
     for (const shot of project.shots) {
@@ -1601,9 +1728,14 @@ async function handleGenerationApi(request, response, url) {
       }
 
       setStagePending(shot, stage);
-      queued.push(await generationTask(project, shot, stage));
+      queuedShots.push(shot);
     }
 
+    const queued = await mapInBatches(
+      queuedShots,
+      generationBatchSize,
+      (shot) => generationTask(project, shot, stage)
+    );
     const saved = await saveProject(project);
     return sendJson(response, 201, { project: saved, queued, skipped });
   }
@@ -1668,7 +1800,7 @@ async function handleGenerationApi(request, response, url) {
         if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
         if (body.jimengSubmitId) shot.jimengSubmitId = String(body.jimengSubmitId);
         if (stage === "materials") {
-          await copyGeneratedAssetToLibrary(body.sourcePath, shot, body);
+          await copyGeneratedAssetToLibrary(project, shot, body.sourcePath, body);
           shot.materialStatus = "ready";
           shot.materialError = "";
           shot.materialCompletedAt = new Date().toISOString();

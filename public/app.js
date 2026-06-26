@@ -574,13 +574,13 @@ function subjectGroupForAsset(assetId) {
   return groupSubjectAssets().find((group) => group.ids.includes(assetId));
 }
 
-function renderSubjectThumb(group) {
-  const thumb = renderAssetThumb(group.image || group.audio);
+function renderSubjectThumb(group, options = {}) {
+  const thumb = renderAssetThumb(group.image || group.audio, options);
   if (group.audio) thumb.dataset.hasAudio = "true";
   return thumb;
 }
 
-function renderAssetThumb(asset) {
+function renderAssetThumb(asset, options = {}) {
   const thumb = document.createElement("span");
   thumb.className = "asset-thumb";
   if (asset?.type === "image" && asset.url) {
@@ -588,6 +588,21 @@ function renderAssetThumb(asset) {
     image.src = asset.url;
     image.alt = asset.name;
     thumb.append(image);
+    if (options.preview) {
+      thumb.classList.add("asset-thumb-preview");
+      thumb.setAttribute("role", "button");
+      thumb.tabIndex = 0;
+      thumb.title = "点击放大";
+      const open = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openAssetLightbox(asset);
+      };
+      thumb.addEventListener("click", open);
+      thumb.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") open(event);
+      });
+    }
   } else {
     thumb.textContent = asset?.type === "audio" ? "音频" : "图片";
   }
@@ -754,6 +769,7 @@ function openLightbox(shot, index, stage = "video", url = "") {
   lightboxShotId = shot.id;
   lightboxStageName = stage;
   lightboxStage.replaceChildren();
+  document.querySelector("#lightbox-upload").hidden = false;
   const mediaUrl = url || (stage === "storyboard" ? shot.storyboardUrl : shot.mediaUrl);
   const media = stage === "video"
     ? Object.assign(document.createElement("video"), { controls: true, autoplay: true })
@@ -763,18 +779,44 @@ function openLightbox(shot, index, stage = "video", url = "") {
   lightboxStage.append(media);
   document.querySelector("#lightbox-caption").textContent =
     `镜头 ${String(index + 1).padStart(2, "0")} · ${stageInfo(shot, stage).label}`;
+  showLightbox();
+  document.body.classList.add("lightbox-open");
+  document.querySelector("#lightbox-close").focus();
+}
+
+function showLightbox() {
   lightbox.hidden = false;
+  if (typeof lightbox.showModal === "function" && !lightbox.open) {
+    lightbox.showModal();
+  }
+}
+
+function openAssetLightbox(asset) {
+  if (!asset?.url || asset.type !== "image") return;
+  lightboxShotId = "";
+  lightboxStageName = "asset";
+  lightboxStage.replaceChildren();
+  document.querySelector("#lightbox-upload").hidden = true;
+  const image = document.createElement("img");
+  image.src = asset.url;
+  image.alt = asset.name || "物料图片";
+  lightboxStage.append(image);
+  document.querySelector("#lightbox-caption").textContent = asset.name || "物料图片";
+  showLightbox();
   document.body.classList.add("lightbox-open");
   document.querySelector("#lightbox-close").focus();
 }
 
 function closeLightbox() {
-  if (lightbox.hidden) return;
+  if (lightbox.hidden && !lightbox.open) return;
   lightboxStage.querySelector("video")?.pause();
+  lightboxStage.querySelector("audio")?.pause();
+  if (lightbox.open && typeof lightbox.close === "function") lightbox.close();
   lightbox.hidden = true;
   lightboxStage.replaceChildren();
   lightboxShotId = "";
   lightboxStageName = "video";
+  document.querySelector("#lightbox-upload").hidden = false;
   document.body.classList.remove("lightbox-open");
 }
 
@@ -929,6 +971,11 @@ function updateSummary() {
   );
 }
 
+function resizeTextarea(textarea) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
 function renderProjectConfigSelects() {
   ["materials", "storyboard", "video"].forEach((stage) => {
     const meta = stageConfigMeta(stage);
@@ -1013,8 +1060,14 @@ function renderStoryboard() {
     row.querySelectorAll("[data-field]").forEach((control) => {
       const field = control.dataset.field;
       control.value = shot[field];
+      if (control.tagName === "TEXTAREA") {
+        control.classList.toggle("visual-prompt-input", field === "visualPrompt");
+        control.classList.toggle("notes-input", field === "notes");
+        resizeTextarea(control);
+      }
       control.addEventListener("input", () => {
         shot[field] = field === "duration" ? Number(control.value) : control.value;
+        if (control.tagName === "TEXTAREA") resizeTextarea(control);
         updateSummary();
         if (field === "visualPrompt") {
           updateBatchButton();
@@ -1048,6 +1101,7 @@ function renderStoryboard() {
       renderStoryboard();
     });
     body.append(row);
+    row.querySelectorAll("textarea").forEach(resizeTextarea);
   });
 
   updateSummary();
@@ -1306,13 +1360,34 @@ function renderAssetLibraryDialog() {
     audioBox.className = "subject-audio-box";
     const audioLabel = document.createElement("span");
     audioLabel.textContent = group.audio ? group.audio.name : "未关联音频";
+    audioBox.append(audioLabel);
+    if (group.audio?.url) {
+      const audioPlayer = document.createElement("audio");
+      audioPlayer.controls = true;
+      audioPlayer.preload = "none";
+      audioPlayer.src = group.audio.url;
+      audioPlayer.setAttribute("aria-label", `${subjectDisplayName(group)} 音频`);
+      audioBox.append(audioPlayer);
+    }
     const audioButton = document.createElement("button");
     audioButton.type = "button";
     audioButton.className = "secondary compact-button";
     audioButton.textContent = group.audio ? "替换音频" : "上传音频";
     audioButton.addEventListener("click", () => chooseSubjectAudioUpload(group));
-    audioBox.append(audioLabel, audioButton);
-    media.append(renderSubjectThumb(group), mediaStatus, audioBox);
+    audioBox.append(audioButton);
+    if (group.audio) {
+      const deleteAudioButton = document.createElement("button");
+      deleteAudioButton.type = "button";
+      deleteAudioButton.className = "secondary compact-button";
+      deleteAudioButton.textContent = "删除音频";
+      deleteAudioButton.addEventListener("click", async () => {
+        await deleteAsset(group.audio.id, { silent: true });
+        renderAssetLibraryDialog();
+        showToast("音频已删除");
+      });
+      audioBox.append(deleteAudioButton);
+    }
+    media.append(renderSubjectThumb(group, { preview: true }), mediaStatus, audioBox);
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-asset";
@@ -1357,7 +1432,7 @@ function renderAssetLibraryDialog() {
     remove.className = "delete-asset";
     remove.textContent = "删除";
     remove.addEventListener("click", () => deleteAsset(asset.id));
-    card.append(renderAssetThumb(asset), fields, remove);
+    card.append(renderAssetThumb(asset, { preview: true }), fields, remove);
     materialGrid.append(card);
   });
 }
@@ -1911,16 +1986,17 @@ lightbox.addEventListener("click", (event) => {
   if (event.target === lightbox || event.target === lightboxStage) closeLightbox();
 });
 document.addEventListener("keydown", (event) => {
+  const lightboxOpen = lightbox.open || !lightbox.hidden;
   if (event.key === "Escape" && !designMenuPopover.hidden) {
     closeDesignMenu(true);
     designMenuTrigger.focus();
   }
-  if (event.key === "Escape" && !lightbox.hidden) closeLightbox();
-  if (event.key === "Tab" && !lightbox.hidden) {
+  if (event.key === "Escape" && lightboxOpen) closeLightbox();
+  if (event.key === "Tab" && lightboxOpen) {
     const controls = [
       document.querySelector("#lightbox-close"),
       document.querySelector("#lightbox-upload")
-    ];
+    ].filter((control) => !control.hidden);
     const index = controls.indexOf(document.activeElement);
     event.preventDefault();
     controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
