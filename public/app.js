@@ -2125,7 +2125,7 @@ document.querySelector("#confirm-video-generation").addEventListener("click", as
   videoConfirmShotId = "";
   videoConfirmShotIds = [];
   if (shots.length === 0) return;
-  await queueGeneration(shotIds, shots.some((shot) => ["ready", "failed"].includes(shot.videoStatus || shot.generationStatus)), {
+  await queueGeneration(shotIds, true, {
     stage: "video",
     videoConfirmed: true
   });

@@ -816,6 +816,10 @@ function stageTaskId(shot, stage) {
   return shot.videoTaskId;
 }
 
+function hasVideoOutput(shot) {
+  return uniqueStrings([shot.mediaUrl, ...(shot.mediaUrls || [])]).length > 0;
+}
+
 function stageError(shot, stage) {
   if (stage === "materials") return shot.materialError;
   if (stage === "storyboard") return shot.storyboardError;
@@ -1809,15 +1813,18 @@ async function handleGenerationApi(request, response, url) {
         skipped.push({ shotId: shot.id, reason: "missing-prompt" });
         continue;
       }
-      if (["pending", "processing"].includes(stageStatus(shot, stage))) {
-        skipped.push({ shotId: shot.id, reason: stageStatus(shot, stage) });
+      const status = stageStatus(shot, stage);
+      const regenerateExistingVideo = stage === "video" && hasVideoOutput(shot) && body.videoConfirmed === true;
+      if (["pending", "processing"].includes(status)) {
+        skipped.push({ shotId: shot.id, reason: status });
         continue;
       }
-      if (!force && stageStatus(shot, stage) === "ready") {
+      if (!force && !regenerateExistingVideo && status === "ready") {
         skipped.push({ shotId: shot.id, reason: "ready" });
         continue;
       }
 
+      if (regenerateExistingVideo) shot.jimengSubmitId = "";
       setStagePending(shot, stage);
       queuedShots.push(shot);
     }
@@ -1926,7 +1933,7 @@ async function handleGenerationApi(request, response, url) {
       }
 
       if (action === "update") {
-        if (body.jimengSubmitId) shot.jimengSubmitId = String(body.jimengSubmitId);
+        if (body.jimengSubmitId !== undefined) shot.jimengSubmitId = String(body.jimengSubmitId || "");
         if (body.error !== undefined) {
           if (stage === "materials") shot.materialError = String(body.error || "");
           else if (stage === "storyboard") shot.storyboardError = String(body.error || "");
