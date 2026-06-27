@@ -240,15 +240,9 @@ function statusLabel(status, error = "") {
 
 function canQueueStage(shot, stage) {
   if (!shot.visualPrompt.trim()) return false;
-  if (shot.workflowStatus === "done") return false;
-  const status = stage === "materials"
-    ? shot.materialStatus
-    : stage === "storyboard"
-      ? shot.storyboardStatus
-      : (shot.videoStatus || shot.generationStatus);
-  if (["pending", "processing"].includes(status)) return false;
-  if (status === "ready") return shot.workflowStatus === "needs_regen";
-  return true;
+  if (stage === "materials") return !["pending", "processing", "ready"].includes(shot.materialStatus);
+  if (stage === "storyboard") return !["pending", "processing", "ready"].includes(shot.storyboardStatus);
+  return !["pending", "processing", "ready"].includes(shot.videoStatus || shot.generationStatus);
 }
 
 function updateBatchButton() {
@@ -851,7 +845,6 @@ function renderWorkflowCell(container, shot) {
     shot.workflowStatus = select.value;
     statusWrap.dataset.status = select.value;
     markShotDirty(shot, "workflowStatus");
-    updateBatchButton();
     queueSave();
   });
   statusWrap.append(caption, select);

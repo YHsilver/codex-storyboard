@@ -35,7 +35,7 @@ Each shot should include:
 
 Final shot output is always video. Material images and storyboard images are independent stage outputs; if they exist or are selected from the material library, the server automatically carries them into later generation tasks.
 
-When a project should use recurring characters, scenes, or style references, call `list_storyboard_assets` first and set matching `inputAssetRefs` on the relevant shots. The storyboard server also auto-references library assets by name, person name, alias, and tag when generation tasks are queued.
+When a project should use recurring characters or voices, call `list_storyboard_assets` first and set matching subject image/audio IDs in `subjectAssetRefs`. Put scene, style, prop, and other non-subject references in `inputAssetRefs`. The storyboard server also auto-references library assets by name, person name, alias, and tag when generation tasks are queued.
 
 ## Find and inspect
 

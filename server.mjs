@@ -39,6 +39,9 @@ const generationStages = ["materials", "storyboard", "video"];
 const generationStatuses = ["idle", "pending", "processing", "ready", "failed"];
 const workflowStatuses = ["todo", "done", "needs_regen", "blocked"];
 const generationBatchSize = 5;
+const generationTaskLeaseMs = Number(process.env.GENERATION_TASK_LEASE_MS || 30 * 60 * 1000);
+const generatedImageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const generatedVideoExtensions = new Set([".mp4", ".webm", ".mov"]);
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -377,6 +380,8 @@ function normalizeShot(shot = {}) {
     materialRequestedAt: shot.materialRequestedAt || null,
     materialStartedAt: shot.materialStartedAt || null,
     materialCompletedAt: shot.materialCompletedAt || null,
+    materialClaimedBy: String(shot.materialClaimedBy || ""),
+    materialLeaseExpiresAt: shot.materialLeaseExpiresAt || null,
     storyboardPrompt: String(shot.storyboardPrompt || ""),
     storyboardUrl: storyboardUrls[0] || "",
     storyboardUrls,
@@ -387,6 +392,8 @@ function normalizeShot(shot = {}) {
     storyboardRequestedAt: shot.storyboardRequestedAt || null,
     storyboardStartedAt: shot.storyboardStartedAt || null,
     storyboardCompletedAt: shot.storyboardCompletedAt || null,
+    storyboardClaimedBy: String(shot.storyboardClaimedBy || ""),
+    storyboardLeaseExpiresAt: shot.storyboardLeaseExpiresAt || null,
     mediaUrl: mediaUrls[0] || "",
     mediaUrls,
     notes: String(shot.notes || ""),
@@ -402,6 +409,8 @@ function normalizeShot(shot = {}) {
     videoRequestedAt: shot.videoRequestedAt || shot.generationRequestedAt || null,
     videoStartedAt: shot.videoStartedAt || shot.generationStartedAt || null,
     videoCompletedAt: shot.videoCompletedAt || shot.generationCompletedAt || null,
+    videoClaimedBy: String(shot.videoClaimedBy || shot.generationClaimedBy || ""),
+    videoLeaseExpiresAt: shot.videoLeaseExpiresAt || shot.generationLeaseExpiresAt || null,
     videoConfirmedAt: shot.videoConfirmedAt || null,
     jimengSubmitId: String(shot.jimengSubmitId || "")
   };
@@ -803,6 +812,103 @@ function subjectReferenceLines(inputAssets) {
   ].filter(Boolean).join("；")).join("\n");
 }
 
+function subjectInputPairs(inputAssets) {
+  const groups = new Map();
+  inputAssets
+    .filter((asset) => asset.kind === "subject" || asset.isSubject)
+    .forEach((asset) => {
+      const key = subjectAssetKey(asset);
+      const group = groups.get(key) || {
+        key,
+        name: asset.personName || asset.name || "未命名主体",
+        imageLabel: "",
+        imagePath: "",
+        audioLabel: "",
+        audioPath: "",
+        notes: asset.notes || "",
+        aliases: [],
+        tags: []
+      };
+      if (asset.type === "image" && asset.imageLabel && !group.imageLabel) {
+        group.imageLabel = asset.imageLabel;
+        group.imagePath = asset.path || "";
+      }
+      if (asset.type === "audio" && asset.audioLabel && !group.audioLabel) {
+        group.audioLabel = asset.audioLabel;
+        group.audioPath = asset.path || "";
+      }
+      if (!group.notes && asset.notes) group.notes = asset.notes;
+      group.aliases.push(...(asset.aliases || []));
+      group.tags.push(...(asset.tags || []));
+      groups.set(key, group);
+    });
+  return [...groups.values()].map((group) => ({
+    ...group,
+    aliases: uniqueStrings(group.aliases),
+    tags: uniqueStrings(group.tags)
+  }));
+}
+
+function buildTaskCommandPlan(task, inputAssets) {
+  const images = inputAssets
+    .filter((asset) => asset.type === "image")
+    .map((asset) => ({
+      label: asset.imageLabel,
+      path: asset.path,
+      usage: asset.usage,
+      name: asset.name
+    }));
+  const audio = inputAssets
+    .filter((asset) => asset.type === "audio")
+    .map((asset) => ({
+      label: asset.audioLabel,
+      path: asset.path,
+      usage: asset.usage,
+      name: asset.name
+    }));
+
+  if (task.generator === "image-gen") {
+    return {
+      provider: "image-generation",
+      aspectRatio: task.aspectRatio,
+      mediaType: "image",
+      promptSource: "compiledPrompt",
+      images
+    };
+  }
+
+  const config = task.generatorConfig || {};
+  if (task.stage === "video") {
+    return {
+      provider: "jimeng-cli",
+      command: "multimodal2video",
+      imageArgs: images.map((asset) => asset.path),
+      audioArgs: audio.map((asset) => asset.path),
+      promptSource: "compiledPrompt",
+      modelVersion: config.modelVersion,
+      duration: task.duration,
+      ratio: task.aspectRatio,
+      videoResolution: config.resolution,
+      pollSeconds: config.pollSeconds,
+      outputDir: task.outputDir,
+      requiresManualConfirmation: true
+    };
+  }
+
+  return {
+    provider: "jimeng-cli",
+    command: images.length > 0 ? "image2image" : "text2image",
+    imageArgs: images.map((asset) => asset.path),
+    promptSource: "compiledPrompt",
+    modelVersion: config.modelVersion,
+    ratio: task.aspectRatio,
+    resolutionType: config.resolution,
+    pollSeconds: config.pollSeconds,
+    outputDir: task.outputDir,
+    requiresManualConfirmation: true
+  };
+}
+
 function buildStagePrompt(shot, config, stage, inputAssets = [], project = null, libraryAssets = []) {
   const promptPrefix = String(config.prompt || "").trim();
   const referenceTemplate = String(config.referenceTemplate || "").trim();
@@ -850,6 +956,78 @@ function stageStatus(shot, stage) {
   return shot.videoStatus;
 }
 
+function stageClaimedBy(shot, stage) {
+  if (stage === "materials") return shot.materialClaimedBy;
+  if (stage === "storyboard") return shot.storyboardClaimedBy;
+  return shot.videoClaimedBy;
+}
+
+function stageLeaseExpiresAt(shot, stage) {
+  if (stage === "materials") return shot.materialLeaseExpiresAt;
+  if (stage === "storyboard") return shot.storyboardLeaseExpiresAt;
+  return shot.videoLeaseExpiresAt;
+}
+
+function stageLeaseExpired(shot, stage, now = Date.now()) {
+  const expiresAt = Date.parse(stageLeaseExpiresAt(shot, stage) || "");
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
+function stageCanClaim(shot, stage, now = Date.now()) {
+  const status = stageStatus(shot, stage);
+  return status === "pending" || (status === "processing" && stageLeaseExpired(shot, stage, now));
+}
+
+function stageCanResume(shot, stage) {
+  return stageStatus(shot, stage) === "processing" && Boolean(shot.jimengSubmitId);
+}
+
+function setStageClaim(shot, stage, body = {}) {
+  const now = new Date();
+  const leaseSeconds = Number(body.leaseSeconds || generationTaskLeaseMs / 1000);
+  const safeLeaseSeconds = Number.isFinite(leaseSeconds)
+    ? Math.min(Math.max(leaseSeconds, 60), 24 * 60 * 60)
+    : generationTaskLeaseMs / 1000;
+  const claimedBy = String(body.workerId || body.claimedBy || "codex").slice(0, 120);
+  const leaseExpiresAt = new Date(now.getTime() + safeLeaseSeconds * 1000).toISOString();
+
+  if (stage === "materials") {
+    shot.materialStatus = "processing";
+    shot.materialStartedAt = now.toISOString();
+    shot.materialClaimedBy = claimedBy;
+    shot.materialLeaseExpiresAt = leaseExpiresAt;
+    return;
+  }
+  if (stage === "storyboard") {
+    shot.storyboardStatus = "processing";
+    shot.storyboardStartedAt = now.toISOString();
+    shot.storyboardClaimedBy = claimedBy;
+    shot.storyboardLeaseExpiresAt = leaseExpiresAt;
+    return;
+  }
+  shot.videoStatus = "processing";
+  shot.generationStatus = "processing";
+  shot.videoStartedAt = now.toISOString();
+  shot.generationStartedAt = shot.videoStartedAt;
+  shot.videoClaimedBy = claimedBy;
+  shot.videoLeaseExpiresAt = leaseExpiresAt;
+}
+
+function clearStageClaim(shot, stage) {
+  if (stage === "materials") {
+    shot.materialClaimedBy = "";
+    shot.materialLeaseExpiresAt = null;
+    return;
+  }
+  if (stage === "storyboard") {
+    shot.storyboardClaimedBy = "";
+    shot.storyboardLeaseExpiresAt = null;
+    return;
+  }
+  shot.videoClaimedBy = "";
+  shot.videoLeaseExpiresAt = null;
+}
+
 function stageTaskId(shot, stage) {
   if (stage === "materials") return shot.materialTaskId;
   if (stage === "storyboard") return shot.storyboardTaskId;
@@ -875,6 +1053,7 @@ function setStagePending(shot, stage) {
     shot.materialRequestedAt = now;
     shot.materialStartedAt = null;
     shot.materialCompletedAt = null;
+    clearStageClaim(shot, stage);
     return;
   }
   if (stage === "storyboard") {
@@ -884,6 +1063,7 @@ function setStagePending(shot, stage) {
     shot.storyboardRequestedAt = now;
     shot.storyboardStartedAt = null;
     shot.storyboardCompletedAt = null;
+    clearStageClaim(shot, stage);
     return;
   }
   shot.videoTaskId = createTaskId();
@@ -900,6 +1080,7 @@ function setStagePending(shot, stage) {
   shot.generationCompletedAt = null;
   shot.videoConfirmedAt = now;
   shot.jimengSubmitId = "";
+  clearStageClaim(shot, stage);
 }
 
 function buildGeneratorConfig(shot, config, project, inputAssets = [], stage = "video") {
@@ -1036,7 +1217,7 @@ async function generationTask(project, shot, stage = "video") {
   const dimensions = aspectRatios[project.aspectRatio];
   const taskId = stageTaskId(shot, stage);
   const taskOutputDir = resolve(rootDir, "generation", project.id, taskId);
-  return {
+  const task = {
     taskId,
     stage,
     stageLabel: {
@@ -1074,11 +1255,18 @@ async function generationTask(project, shot, stage = "video") {
     inputAssetRefs: shot.inputAssetRefs,
     subjectAssetRefs,
     subjectAssets: uniqueAssets.filter((asset) => asset.kind === "subject"),
+    subjectPairs: subjectInputPairs(uniqueAssets),
     materialAssetRefs: shot.materialAssetRefs,
     storyboardUrl: shot.storyboardUrl,
     storyboardAssetRef: shot.storyboardAssetRef,
     autoAssetRefs: [],
     generatorConfig: buildGeneratorConfig(shot, modelConfig, project, uniqueAssets, stage),
+    claimedBy: stageClaimedBy(shot, stage),
+    leaseExpiresAt: stageLeaseExpiresAt(shot, stage),
+    leaseExpired: stageLeaseExpired(shot, stage),
+    canClaim: stageCanClaim(shot, stage),
+    canResume: stageCanResume(shot, stage),
+    resumeReason: stageCanResume(shot, stage) ? "processing task has jimengSubmitId" : "",
     videoConfirmedAt: shot.videoConfirmedAt,
     jimengSubmitId: shot.jimengSubmitId,
     notes: shot.notes,
@@ -1087,10 +1275,33 @@ async function generationTask(project, shot, stage = "video") {
     completedAt: stage === "materials" ? shot.materialCompletedAt : stage === "storyboard" ? shot.storyboardCompletedAt : shot.videoCompletedAt,
     error: stageError(shot, stage)
   };
+  task.commandPlan = buildTaskCommandPlan(task, uniqueAssets);
+  return task;
 }
 
 function isVideoExtension(extension) {
-  return [".mp4", ".webm", ".mov"].includes(extension);
+  return generatedVideoExtensions.has(extension);
+}
+
+function isImageExtension(extension) {
+  return generatedImageExtensions.has(extension);
+}
+
+async function validateGeneratedStageMedia(stage, sourcePath, mediaType = "") {
+  const resolvedSource = resolve(String(sourcePath));
+  await stat(resolvedSource);
+  const extension = extname(resolvedSource).toLowerCase();
+  const expectedType = stage === "video" ? "video" : "image";
+  if (mediaType && mediaType !== expectedType) {
+    throw new Error(`${stage} stage requires mediaType "${expectedType}"`);
+  }
+  if (expectedType === "video" && !isVideoExtension(extension)) {
+    throw new Error("最终产物只支持 MP4、WebM 或 MOV 文件");
+  }
+  if (expectedType === "image" && !isImageExtension(extension)) {
+    throw new Error("物料图和故事板只支持 PNG、JPEG 或 WebP 文件");
+  }
+  return resolvedSource;
 }
 
 async function attachMedia(project, shot, sourcePath) {
@@ -1211,6 +1422,7 @@ async function saveUploadedStageMedia(project, shot, stage, request) {
     shot.materialTaskId = "";
     shot.materialError = "";
     shot.materialCompletedAt = new Date().toISOString();
+    clearStageClaim(shot, stage);
     return asset;
   }
   if (stage === "storyboard") {
@@ -1222,6 +1434,7 @@ async function saveUploadedStageMedia(project, shot, stage, request) {
     shot.storyboardTaskId = "";
     shot.storyboardError = "";
     shot.storyboardCompletedAt = new Date().toISOString();
+    clearStageClaim(shot, stage);
     return null;
   }
   const url = mediaUrl(project.id, fileName);
@@ -1236,6 +1449,7 @@ async function saveUploadedStageMedia(project, shot, stage, request) {
   shot.videoTaskId = "";
   shot.videoError = "";
   shot.videoCompletedAt = shot.generationCompletedAt;
+  clearStageClaim(shot, stage);
   return null;
 }
 
@@ -1411,6 +1625,7 @@ function cancelPendingStage(shot, stage) {
     shot.materialRequestedAt = null;
     shot.materialStartedAt = null;
     shot.materialCompletedAt = shot.materialAssetRefs.length > 0 ? shot.materialCompletedAt : null;
+    clearStageClaim(shot, stage);
     return;
   }
   if (stage === "storyboard") {
@@ -1420,6 +1635,7 @@ function cancelPendingStage(shot, stage) {
     shot.storyboardRequestedAt = null;
     shot.storyboardStartedAt = null;
     shot.storyboardCompletedAt = shot.storyboardUrl ? shot.storyboardCompletedAt : null;
+    clearStageClaim(shot, stage);
     return;
   }
   shot.videoStatus = shot.mediaUrl ? "ready" : "idle";
@@ -1434,6 +1650,7 @@ function cancelPendingStage(shot, stage) {
   shot.generationStartedAt = null;
   shot.videoCompletedAt = shot.mediaUrl ? shot.videoCompletedAt : null;
   shot.generationCompletedAt = shot.videoCompletedAt;
+  clearStageClaim(shot, stage);
 }
 
 async function migrateLegacyProject() {
@@ -1568,6 +1785,9 @@ async function handleProjectsApi(request, response, url) {
   if (request.method === "PUT") {
     const current = await readProject(projectId);
     const body = await readBody(request);
+    if (body.expectedUpdatedAt && body.expectedUpdatedAt !== current.updatedAt) {
+      return sendError(response, 409, "Project changed since it was read; refresh before updating");
+    }
     return sendJson(response, 200, await saveProject({
       ...current,
       title: body.title,
@@ -1830,21 +2050,34 @@ async function handleGenerationApi(request, response, url) {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
+    const stages = (url.searchParams.get("stage") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => generationStages.includes(value));
+    const projectId = url.searchParams.get("projectId") || "";
+    const taskId = url.searchParams.get("taskId") || "";
+    const limit = Number(url.searchParams.get("limit") || 0);
     const tasks = [];
     for (const record of index.projects) {
+      if (projectId && record.id !== projectId) continue;
       const project = await readProject(record.id);
       const staged = [];
       for (const shot of project.shots) {
         for (const stage of generationStages) {
+          if (stages.length > 0 && !stages.includes(stage)) continue;
           if (!stageTaskId(shot, stage)) continue;
+          if (taskId && stageTaskId(shot, stage) !== taskId) continue;
           if (statuses.length > 0 && !statuses.includes(stageStatus(shot, stage))) continue;
           staged.push(generationTask(project, shot, stage));
         }
       }
       const projectTasks = await Promise.all(staged);
       tasks.push(...projectTasks);
+      if (limit > 0 && tasks.length >= limit) break;
     }
-    return sendJson(response, 200, { tasks });
+    return sendJson(response, 200, {
+      tasks: limit > 0 ? tasks.slice(0, limit) : tasks
+    });
   }
 
   if (request.method === "POST" && url.pathname === "/api/generation/tasks") {
@@ -1934,38 +2167,31 @@ async function handleGenerationApi(request, response, url) {
       const body = await readBody(request);
 
       if (action === "claim") {
-        if (stageStatus(shot, stage) !== "pending") {
+        if (!stageCanClaim(shot, stage)) {
           return sendError(response, 409, `Task is ${stageStatus(shot, stage)}`);
         }
-        if (stage === "materials") {
-          shot.materialStatus = "processing";
-          shot.materialStartedAt = new Date().toISOString();
-        } else if (stage === "storyboard") {
-          shot.storyboardStatus = "processing";
-          shot.storyboardStartedAt = new Date().toISOString();
-        } else {
-          shot.videoStatus = "processing";
-          shot.generationStatus = "processing";
-          shot.videoStartedAt = new Date().toISOString();
-          shot.generationStartedAt = shot.videoStartedAt;
-        }
+        setStageClaim(shot, stage, body);
       }
 
       if (action === "complete") {
         if (!body.sourcePath) return sendError(response, 400, "sourcePath is required");
+        await validateGeneratedStageMedia(stage, body.sourcePath, body.mediaType || "");
         if (body.jimengSubmitId) shot.jimengSubmitId = String(body.jimengSubmitId);
         if (stage === "materials") {
           await copyGeneratedAssetToLibrary(project, shot, body.sourcePath, body);
           shot.materialStatus = "ready";
           shot.materialError = "";
           shot.materialCompletedAt = new Date().toISOString();
+          clearStageClaim(shot, stage);
         } else if (stage === "storyboard") {
           await attachStoryboard(project, shot, body.sourcePath);
+          clearStageClaim(shot, stage);
         } else {
           await attachMedia(project, shot, body.sourcePath);
           shot.videoStatus = shot.generationStatus;
           shot.videoError = shot.generationError;
           shot.videoCompletedAt = shot.generationCompletedAt;
+          clearStageClaim(shot, stage);
         }
       }
 
@@ -1975,10 +2201,12 @@ async function handleGenerationApi(request, response, url) {
           shot.materialStatus = "failed";
           shot.materialError = String(body.error || "生成失败");
           shot.materialCompletedAt = new Date().toISOString();
+          clearStageClaim(shot, stage);
         } else if (stage === "storyboard") {
           shot.storyboardStatus = "failed";
           shot.storyboardError = String(body.error || "生成失败");
           shot.storyboardCompletedAt = new Date().toISOString();
+          clearStageClaim(shot, stage);
         } else {
           shot.videoStatus = "failed";
           shot.generationStatus = "failed";
@@ -1986,11 +2214,15 @@ async function handleGenerationApi(request, response, url) {
           shot.generationError = shot.videoError;
           shot.videoCompletedAt = new Date().toISOString();
           shot.generationCompletedAt = shot.videoCompletedAt;
+          clearStageClaim(shot, stage);
         }
       }
 
       if (action === "update") {
         if (body.jimengSubmitId !== undefined) shot.jimengSubmitId = String(body.jimengSubmitId || "");
+        if (body.leaseSeconds !== undefined || body.workerId !== undefined) {
+          if (stageStatus(shot, stage) === "processing") setStageClaim(shot, stage, body);
+        }
         if (body.error !== undefined) {
           if (stage === "materials") shot.materialError = String(body.error || "");
           else if (stage === "storyboard") shot.storyboardError = String(body.error || "");

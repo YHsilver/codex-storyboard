@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
 const SERVER_NAME = "Codex Storyboard MCP";
-const SERVER_VERSION = "0.4.0";
+const SERVER_VERSION = "0.5.0";
 const DEFAULT_URL = "http://127.0.0.1:43218";
 const ASPECT_RATIOS = ["9:16", "16:9", "3:4", "4:3", "1:1"];
 
@@ -77,6 +77,18 @@ function projectSummary(project) {
     hasDesign: Boolean(project.hasDesign),
     duration: project.duration
   };
+}
+
+function compactTask(task, includePrompt = false) {
+  if (includePrompt) return task;
+  const {
+    compiledPrompt,
+    promptPrefix,
+    referenceTemplate,
+    promptTemplates,
+    ...compact
+  } = task;
+  return compact;
 }
 
 async function uploadDesign(projectId, designPath, args) {
@@ -183,6 +195,10 @@ function tools() {
             description: "Optional absolute path to a replacement local DESIGN.md."
           },
           removeDesign: { type: "boolean" },
+          expectedUpdatedAt: {
+            type: "string",
+            description: "Optional concurrency guard; defaults to the timestamp read by this tool call."
+          },
           storyboardUrl: { type: "string" }
         },
         required: ["projectId"],
@@ -245,6 +261,14 @@ function tools() {
             type: "string",
             description: "Comma-separated statuses. Defaults to pending. Values: pending,processing,ready,failed."
           },
+          projectId: { type: "string", description: "Optional project ID filter." },
+          taskId: { type: "string", description: "Optional task ID filter." },
+          stage: { type: "string", description: "Optional comma-separated stages: materials,storyboard,video." },
+          limit: { type: "number", minimum: 1, description: "Optional maximum number of tasks." },
+          includePrompt: {
+            type: "boolean",
+            description: "Include compiledPrompt and prompt templates. Defaults to false for compact listings."
+          },
           storyboardUrl: { type: "string", description: `Storyboard URL. Defaults to ${DEFAULT_URL}.` }
         },
         additionalProperties: false
@@ -264,6 +288,8 @@ function tools() {
         type: "object",
         properties: {
           taskId: { type: "string" },
+          workerId: { type: "string", description: "Optional worker label for the processing lease." },
+          leaseSeconds: { type: "number", minimum: 60, description: "Optional processing lease length. Defaults to server policy." },
           storyboardUrl: { type: "string" }
         },
         required: ["taskId"],
@@ -286,6 +312,8 @@ function tools() {
           taskId: { type: "string" },
           jimengSubmitId: { type: "string" },
           error: { type: "string" },
+          workerId: { type: "string" },
+          leaseSeconds: { type: "number", minimum: 60 },
           storyboardUrl: { type: "string" }
         },
         required: ["taskId"],
@@ -315,7 +343,7 @@ function tools() {
           aliases: { type: "array", items: { type: "string" } },
           storyboardUrl: { type: "string" }
         },
-        required: ["taskId", "sourcePath"],
+        required: ["taskId", "sourcePath", "mediaType"],
         additionalProperties: false
       },
       annotations: {
@@ -474,7 +502,8 @@ async function callTool(id, params) {
         materialConfigKey: project.materialConfigKey,
         storyboardConfigKey: project.storyboardConfigKey,
         videoConfigKey: project.videoConfigKey,
-        shots: project.shots
+        shots: project.shots,
+        expectedUpdatedAt: args.expectedUpdatedAt || project.updatedAt
       }, "PUT"),
       args
     );
@@ -543,16 +572,23 @@ async function callTool(id, params) {
   }
 
   if (params?.name === "list_storyboard_generation_tasks") {
-    const status = encodeURIComponent(args.status || "pending");
-    const result = await requestJson(`/api/generation/tasks?status=${status}`, {}, args);
-    const summary = result.tasks.length === 0
+    const search = new URLSearchParams();
+    search.set("status", args.status || "pending");
+    if (args.projectId) search.set("projectId", args.projectId);
+    if (args.taskId) search.set("taskId", args.taskId);
+    if (args.stage) search.set("stage", args.stage);
+    if (args.limit) search.set("limit", String(args.limit));
+    const includePrompt = args.includePrompt === true;
+    const result = await requestJson(`/api/generation/tasks?${search.toString()}`, {}, args);
+    const tasks = (result.tasks || []).map((task) => compactTask(task, includePrompt));
+    const summary = tasks.length === 0
       ? "No matching storyboard generation tasks."
-      : result.tasks
-          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | user-confirmation: ${task.requiresUserConfirmation ? "required" : "not-required"} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.imageLabel || asset.audioLabel || asset.usage || "ref"} ${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
+      : tasks
+          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | claim: ${task.canClaim ? "available" : "locked"}${task.leaseExpired ? "/expired" : ""} | resume: ${task.canResume ? "yes" : "no"} | user-confirmation: ${task.requiresUserConfirmation ? "required" : "not-required"} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.imageLabel || asset.audioLabel || asset.usage || "ref"} ${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}${includePrompt ? `\n${task.compiledPrompt || task.visualPrompt}` : ""}`)
           .join("\n\n");
     sendResult(id, {
       content: [{ type: "text", text: summary }],
-      structuredContent: result
+      structuredContent: { ...result, tasks }
     });
     return;
   }
@@ -560,7 +596,7 @@ async function callTool(id, params) {
   if (params?.name === "claim_storyboard_generation_task") {
     const result = await requestJson(
       `/api/generation/tasks/${encodeURIComponent(args.taskId)}/claim`,
-      jsonOptions({}),
+      jsonOptions({ workerId: args.workerId, leaseSeconds: args.leaseSeconds }),
       args
     );
     sendResult(id, {
@@ -594,7 +630,12 @@ async function callTool(id, params) {
   if (params?.name === "update_storyboard_generation_task") {
     const result = await requestJson(
       `/api/generation/tasks/${encodeURIComponent(args.taskId)}/update`,
-      jsonOptions({ jimengSubmitId: args.jimengSubmitId, error: args.error }),
+      jsonOptions({
+        jimengSubmitId: args.jimengSubmitId,
+        error: args.error,
+        workerId: args.workerId,
+        leaseSeconds: args.leaseSeconds
+      }),
       args
     );
     sendResult(id, {

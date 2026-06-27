@@ -110,13 +110,13 @@
           <col class="col-index" />
           <col class="col-roll" />
           <col class="col-duration" />
-          <col class="col-workflow" />
           <col class="col-visual" />
           <col class="col-subjects" />
           <col class="col-materials" />
           <col class="col-storyboard" />
           <col class="col-video" />
           <col class="col-notes" />
+          <col class="col-workflow" />
           <col class="col-actions" />
         </colgroup>
         <thead>
@@ -124,7 +124,6 @@
             <th>#</th>
             <th>镜头</th>
             <th>时长</th>
-            <th>状态 / 标签</th>
             <th>画面描述 / 生成提示词</th>
             <th>主体参考</th>
             <th>
@@ -146,6 +145,7 @@
               </div>
             </th>
             <th>备注</th>
+            <th>标签</th>
             <th></th>
           </tr>
         </thead>
@@ -187,13 +187,13 @@
           <span>秒</span>
         </div>
       </td>
-      <td><div class="workflow-cell"></div></td>
       <td><textarea data-field="visualPrompt" placeholder="描述画面、台词、声音和生成提示词"></textarea></td>
       <td><div class="subject-ref-cell"></div></td>
       <td><div class="stage-product" data-stage="materials"></div></td>
       <td><div class="stage-product" data-stage="storyboard"></div></td>
       <td><div class="stage-product" data-stage="video"></div></td>
       <td><textarea data-field="notes" placeholder="补充说明"></textarea></td>
+      <td><div class="workflow-cell"></div></td>
       <td><button class="delete-shot" type="button" aria-label="删除镜头">×</button></td>
     </tr>
   </template>

@@ -424,7 +424,7 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1660px;
+  min-width: 1590px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -432,13 +432,13 @@ table {
 .col-index { width: 48px; }
 .col-roll { width: 108px; }
 .col-duration { width: 86px; }
-.col-workflow { width: 130px; }
 .col-visual { width: 240px; }
 .col-subjects { width: 200px; }
 .col-materials { width: 235px; }
 .col-storyboard { width: 235px; }
 .col-video { width: 235px; }
 .col-notes { width: 95px; }
+.col-workflow { width: 60px; }
 .col-actions { width: 48px; }
 
 th {
@@ -560,17 +560,18 @@ input:focus-visible, textarea:focus-visible {
 
 .workflow-cell {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 .workflow-status-field {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 650;
 }
 .workflow-status-select {
   min-height: 30px;
+  padding-inline: 5px;
   border-color: color-mix(in srgb, var(--workflow-color, var(--line)) 34%, var(--line));
   background: color-mix(in srgb, var(--workflow-color, var(--surface-raised)) 10%, var(--surface-raised));
   color: var(--ink);
@@ -626,7 +627,7 @@ input:focus-visible, textarea:focus-visible {
 }
 .shot-tag-input {
   min-height: 28px;
-  padding: 6px 7px;
+  padding: 6px 5px;
   font-size: 11px;
 }
 

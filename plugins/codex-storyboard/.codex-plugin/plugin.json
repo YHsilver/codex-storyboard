@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Codex Storyboard",
     "shortDescription": "Create storyboards and generate their image and video assets.",
-    "longDescription": "Codex Storyboard lets Codex create, find, update, and delete complete local storyboard projects without browser automation. It also reads pending shots, honors project aspect ratios and DESIGN.md, routes assets to Image Generation, HyperFrames, or Remotion, and returns outputs to the correct project and row.",
+    "longDescription": "Codex Storyboard lets Codex create, find, update, and delete complete local storyboard projects without browser automation. It also reads pending shots, honors project aspect ratios and DESIGN.md, routes image assets to Image Generation or Jimeng CLI, routes videos to Jimeng CLI, and returns outputs to the correct project and row.",
     "developerName": "Yuuhann",
     "category": "Productivity",
     "brandColor": "#0AA6BD",
@@ -21,8 +21,8 @@
       "Project aspect-ratio support",
       "Project DESIGN.md visual guidance",
       "Image generation routing",
-      "HyperFrames video routing",
-      "Remotion video routing",
+      "Jimeng CLI image routing",
+      "Jimeng CLI video routing",
       "Automatic local asset return"
     ],
     "defaultPrompt": [
@@ -30,7 +30,7 @@
       "Find and update my local storyboard project.",
       "Process all pending Codex storyboard generation tasks.",
       "Generate the pending storyboard image assets and return them to the storyboard.",
-      "Generate the pending HyperFrames or Remotion shots and return the rendered videos."
+      "Generate the pending Jimeng CLI shots and return the rendered videos."
     ]
   },
   "mcpServers": "./.mcp.json"

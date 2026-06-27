@@ -27,3 +27,7 @@ Git history is currently minimal, so use concise imperative commit messages such
 ## Security & Configuration Tips
 
 Do not trust uploaded file names or project IDs; preserve the existing validation and path-safety checks. Keep generated media and local project data out of commits unless intentionally adding sample assets or fixtures.
+
+## Dreamina CLI Confirmation Rule
+
+Before running any `dreamina` command that submits generation, polls or downloads generation results, changes account/session state, or may spend credits, show the exact command to the user and wait for explicit manual confirmation. Capability checks such as `dreamina -h`, `dreamina version`, and `dreamina user_credit` may run without confirmation.
