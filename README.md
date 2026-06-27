@@ -40,7 +40,6 @@
 需要 Node.js 18 或更高版本。
 
 ```bash
-git clone https://github.com/Yuuhann1999/codex-storyboard.git
 cd codex-storyboard
 npm start
 ```

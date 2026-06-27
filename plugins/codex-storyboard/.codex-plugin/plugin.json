@@ -3,14 +3,14 @@
   "version": "0.5.0",
   "description": "Create and manage storyboard projects, process image and video generation tasks, and return assets to the local Codex storyboard.",
   "author": {
-    "name": "Yuuhann"
+    "name": "Asher"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Storyboard",
     "shortDescription": "Create storyboards and generate their image and video assets.",
     "longDescription": "Codex Storyboard lets Codex create, find, update, and delete complete local storyboard projects without browser automation. It also reads pending shots, honors project aspect ratios and DESIGN.md, routes image assets to Image Generation or Jimeng CLI, routes videos to Jimeng CLI, and returns outputs to the correct project and row.",
-    "developerName": "Yuuhann",
+    "developerName": "Asher",
     "category": "Productivity",
     "brandColor": "#0AA6BD",
     "capabilities": [
