@@ -27,6 +27,8 @@ Each shot should include:
 - `videoConfigKey`: optional video model override for the final video stage.
 - `inputAssetRefs`: optional material library asset IDs to use as references.
 - `subjectAssetRefs`: optional subject material IDs for recurring people; subject images may be used for material/storyboard generation, and subject images/audio should be used for video generation.
+- `workflowStatus`: optional manual production status, one of `todo`, `done`, `needs_regen`, or `blocked`.
+- `tags`: optional manual shot tags for tracking and filtering.
 - `materialAssetRefs`: optional image material library asset IDs to show as material-image outputs.
 - `storyboardAssetRef`: optional image material library asset ID to use as the storyboard output.
 - `notes`: editing, pacing, transition, or production notes.
@@ -64,3 +66,4 @@ Project deletion permanently removes the project and its local media. Ask for ex
 - Create the complete project with one MCP call.
 - Prefer project summaries over full project reads.
 - Return concise results instead of repeating the full script after it has been written.
+- When user intent is clear, choose reasonable `workflowStatus` and `tags` directly instead of asking another decision question.

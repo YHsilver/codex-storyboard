@@ -43,6 +43,12 @@ const selectOptions = {
     { value: "B-ROLL", label: "B-ROLL" }
   ]
 };
+const workflowStatusOptions = [
+  { value: "todo", label: "待处理" },
+  { value: "done", label: "已完成" },
+  { value: "needs_regen", label: "需重生成" },
+  { value: "blocked", label: "阻塞" }
+];
 
 let project = null;
 let projects = [];
@@ -152,6 +158,8 @@ function emptyShot() {
     videoConfigKey: "",
     inputAssetRefs: [],
     subjectAssetRefs: [],
+    workflowStatus: "todo",
+    tags: [],
     materialPrompt: "",
     materialAssetRefs: [],
     materialStatus: "idle",
@@ -232,9 +240,15 @@ function statusLabel(status, error = "") {
 
 function canQueueStage(shot, stage) {
   if (!shot.visualPrompt.trim()) return false;
-  if (stage === "materials") return !["pending", "processing", "ready"].includes(shot.materialStatus);
-  if (stage === "storyboard") return !["pending", "processing", "ready"].includes(shot.storyboardStatus);
-  return !["pending", "processing", "ready"].includes(shot.videoStatus || shot.generationStatus);
+  if (shot.workflowStatus === "done") return false;
+  const status = stage === "materials"
+    ? shot.materialStatus
+    : stage === "storyboard"
+      ? shot.storyboardStatus
+      : (shot.videoStatus || shot.generationStatus);
+  if (["pending", "processing"].includes(status)) return false;
+  if (status === "ready") return shot.workflowStatus === "needs_regen";
+  return true;
 }
 
 function updateBatchButton() {
@@ -804,6 +818,92 @@ function renderSubjectRefs(container, shot) {
   container.append(list, actions);
 }
 
+function normalizeTagList(tags = []) {
+  const seen = new Set();
+  return tags
+    .map((tag) => String(tag || "").trim())
+    .filter(Boolean)
+    .filter((tag) => {
+      const key = tag.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function renderWorkflowCell(container, shot) {
+  container.replaceChildren();
+  const statusWrap = document.createElement("label");
+  statusWrap.className = "workflow-status-field";
+  const caption = document.createElement("span");
+  caption.textContent = "制作状态";
+  const select = document.createElement("select");
+  select.className = "workflow-status-select";
+  workflowStatusOptions.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option.value;
+    item.textContent = option.label;
+    select.append(item);
+  });
+  select.value = shot.workflowStatus || "todo";
+  statusWrap.dataset.status = select.value;
+  select.addEventListener("change", () => {
+    shot.workflowStatus = select.value;
+    statusWrap.dataset.status = select.value;
+    markShotDirty(shot, "workflowStatus");
+    updateBatchButton();
+    queueSave();
+  });
+  statusWrap.append(caption, select);
+
+  const tagBox = document.createElement("div");
+  tagBox.className = "shot-tag-box";
+  const tagList = document.createElement("div");
+  tagList.className = "shot-tag-list";
+  const input = document.createElement("input");
+  input.className = "shot-tag-input";
+  input.placeholder = "输入标签";
+  input.setAttribute("aria-label", "添加镜头标签");
+
+  const syncTags = () => {
+    shot.tags = normalizeTagList(shot.tags);
+    markShotDirty(shot, "tags");
+    renderWorkflowCell(container, shot);
+    queueSave();
+  };
+  const addTags = () => {
+    const nextTags = normalizeTagList(input.value.split(/[,\n，、]+/));
+    if (nextTags.length === 0) return;
+    shot.tags = normalizeTagList([...(shot.tags || []), ...nextTags]);
+    syncTags();
+  };
+
+  normalizeTagList(shot.tags).forEach((tag) => {
+    const chip = document.createElement("span");
+    chip.className = "shot-tag";
+    const label = document.createElement("span");
+    label.textContent = tag;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `删除标签 ${tag}`);
+    remove.addEventListener("click", () => {
+      shot.tags = normalizeTagList(shot.tags).filter((item) => item !== tag);
+      syncTags();
+    });
+    chip.append(label, remove);
+    tagList.append(chip);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== ",") return;
+    event.preventDefault();
+    addTags();
+  });
+  input.addEventListener("blur", addTags);
+  tagBox.append(tagList, input);
+  container.append(statusWrap, tagBox);
+}
+
 function chooseAssetUpload(shotId = "", kind = "material", meta = {}) {
   assetUploadShotId = shotId;
   assetUploadKind = kind;
@@ -1218,6 +1318,7 @@ function renderStoryboard(options = {}) {
       });
     });
 
+    renderWorkflowCell(row.querySelector(".workflow-cell"), shot);
     renderSubjectRefs(row.querySelector(".subject-ref-cell"), shot);
 
     row.querySelectorAll(".stage-product").forEach((container) => {

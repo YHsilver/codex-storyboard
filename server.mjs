@@ -37,6 +37,7 @@ const aspectRatios = {
 
 const generationStages = ["materials", "storyboard", "video"];
 const generationStatuses = ["idle", "pending", "processing", "ready", "failed"];
+const workflowStatuses = ["todo", "done", "needs_regen", "blocked"];
 const generationBatchSize = 5;
 
 const contentTypes = {
@@ -366,6 +367,8 @@ function normalizeShot(shot = {}) {
     videoConfigKey: String(shot.videoConfigKey || (shot.mediaType === "video" ? shot.configKey || "" : "")),
     inputAssetRefs: uniqueStrings(shot.inputAssetRefs),
     subjectAssetRefs: uniqueStrings(shot.subjectAssetRefs),
+    workflowStatus: workflowStatuses.includes(shot.workflowStatus) ? shot.workflowStatus : "todo",
+    tags: uniqueStrings(shot.tags),
     materialPrompt: String(shot.materialPrompt || ""),
     materialAssetRefs: uniqueStrings(shot.materialAssetRefs),
     materialStatus,
@@ -759,7 +762,7 @@ function stagePromptGoal(shot, stage, inputAssets = [], libraryAssets = []) {
   if (stage === "storyboard") {
     return shot.storyboardPrompt.trim() || "基于当前分镜剧情和已选择素材，生成故事板关键镜头图，画面应覆盖剧情关键瞬间、构图明确、可直接作为视频生成参考。";
   }
-  return "基于当前分镜剧情和已选择素材生成最终视频提示词。必须强烈参考模型配置中的 referenceTemplate：尽量保留模板结构、段落顺序、风格要求和否定控制，只根据当前剧情、素材引用和镜头内容替换占位符并补充必要细节。人物造型、场景、动作和镜头应与引用图片一致。";
+  return "基于当前分镜剧情、主体备注和已选择素材生成最终视频提示词。必须强烈参考模型配置中的 referenceTemplate：尽量保留模板结构、段落顺序、风格要求和否定控制，只根据当前剧情、素材引用和镜头内容替换占位符并补充必要细节。人物造型、声音、场景、动作和镜头应与主体备注及引用素材一致。";
 }
 
 function imageReferenceLines(inputAssets) {
@@ -769,19 +772,53 @@ function imageReferenceLines(inputAssets) {
     .join("\n");
 }
 
+function subjectReferenceLines(inputAssets) {
+  const subjects = inputAssets.filter((asset) => asset.kind === "subject" || asset.isSubject);
+  if (subjects.length === 0) return "";
+  const groups = new Map();
+  subjects.forEach((asset) => {
+    const key = subjectAssetKey(asset);
+    const group = groups.get(key) || {
+      name: asset.personName || asset.name || "未命名主体",
+      imageLabels: [],
+      audioLabels: [],
+      notes: "",
+      aliases: [],
+      tags: []
+    };
+    if (asset.type === "image" && asset.imageLabel) group.imageLabels.push(asset.imageLabel);
+    if (asset.type === "audio" && asset.audioLabel) group.audioLabels.push(asset.audioLabel);
+    if (!group.notes && asset.notes) group.notes = asset.notes;
+    group.aliases.push(...(asset.aliases || []));
+    group.tags.push(...(asset.tags || []));
+    groups.set(key, group);
+  });
+  return [...groups.values()].map((group) => [
+    `主体：${group.name}`,
+    group.imageLabels.length > 0 ? `图片：${uniqueStrings(group.imageLabels).join("、")}` : "",
+    group.audioLabels.length > 0 ? `音频：${uniqueStrings(group.audioLabels).join("、")}` : "",
+    group.notes ? `备注：${group.notes}` : "",
+    group.aliases.length > 0 ? `别名：${uniqueStrings(group.aliases).join("、")}` : "",
+    group.tags.length > 0 ? `标签：${uniqueStrings(group.tags).join("、")}` : ""
+  ].filter(Boolean).join("；")).join("\n");
+}
+
 function buildStagePrompt(shot, config, stage, inputAssets = [], project = null, libraryAssets = []) {
   const promptPrefix = String(config.prompt || "").trim();
   const referenceTemplate = String(config.referenceTemplate || "").trim();
   const references = imageReferenceLines(inputAssets) || "无图片引用。";
+  const subjects = subjectReferenceLines(inputAssets) || "无主体参考。";
   return [
     "请根据以下信息生成真正提交给生成 API 的最终 prompt。",
     "要求：",
     "- 最终 prompt 必须由你重新组织和润色，不要机械照抄参考模板。",
     "- 如果存在 prompt-prefix，必须原样放在最终 prompt 的最前面。",
     "- referenceTemplate 是强烈推荐的参考格式；请按剧情改写内容、处理占位符、补充必要描述，并删除不适用段落。",
-    stage === "video" ? "- 视频阶段必须强烈参考 referenceTemplate，尽量保持模板结构、段落顺序、风格要求和否定控制；主要改动应是填入当前剧情、镜头细节和 [图1] 引用。" : "",
-    "- 引用图片时必须使用 [图1]、[图2] 这类编号，编号必须与 inputAssets 顺序一致。",
-    "- 不要读取图片文件内容；只根据文件名、素材名、usage、编号和分镜文本判断素材用途。",
+    stage === "video" ? "- 视频阶段必须强烈参考 referenceTemplate，尽量保持模板结构、段落顺序、风格要求和否定控制；主要改动应是填入当前剧情、镜头细节和 @图片1 引用。" : "",
+    stage === "video" ? "- 视频阶段必须参考主体备注；主体备注中的外观、声音、性格、表演和动作要求优先用于约束对应主体。" : "",
+    "- 引用图片时必须使用 @图片1、@图片2 这类编号，编号必须与图片输入顺序一致。",
+    "- 引用音频时必须使用 @音频1、@音频2 这类编号，编号必须与音频输入顺序一致。",
+    "- 不要读取图片或音频文件内容；只根据文件名、素材名、usage、编号、主体备注和分镜文本判断素材用途。",
     "",
     `项目：${project?.title || ""}`,
     `阶段：${stage}`,
@@ -798,6 +835,9 @@ function buildStagePrompt(shot, config, stage, inputAssets = [], project = null,
     "",
     "图片引用：",
     references,
+    "",
+    "主体参考：",
+    subjects,
     "",
     "备注：",
     shot.notes.trim() || "无"
@@ -930,6 +970,10 @@ async function generationTask(project, shot, stage = "video") {
       kind: asset.kind,
       isSubject: asset.kind === "subject",
       name: asset.name,
+      personName: asset.personName,
+      aliases: asset.aliases,
+      tags: asset.tags,
+      notes: asset.notes,
       url: asset.url,
       path: resolve(assetFilesDir, asset.fileName),
       mimeType: asset.mimeType,
@@ -945,7 +989,13 @@ async function generationTask(project, shot, stage = "video") {
         inputAssets.push({
           id: storyboardAsset.id,
           type: storyboardAsset.type,
+          kind: storyboardAsset.kind,
+          isSubject: storyboardAsset.kind === "subject",
           name: storyboardAsset.name || "故事板图",
+          personName: storyboardAsset.personName,
+          aliases: storyboardAsset.aliases,
+          tags: storyboardAsset.tags,
+          notes: storyboardAsset.notes,
           url: storyboardAsset.url,
           path: resolve(assetFilesDir, storyboardAsset.fileName),
           mimeType: storyboardAsset.mimeType,
@@ -975,7 +1025,13 @@ async function generationTask(project, shot, stage = "video") {
   uniqueAssets.forEach((asset) => {
     if (asset.type !== "image") return;
     imageIndex += 1;
-    asset.imageLabel = `[图${imageIndex}]`;
+    asset.imageLabel = `@图片${imageIndex}`;
+  });
+  let audioIndex = 0;
+  uniqueAssets.forEach((asset) => {
+    if (asset.type !== "audio") return;
+    audioIndex += 1;
+    asset.audioLabel = `@音频${audioIndex}`;
   });
   const dimensions = aspectRatios[project.aspectRatio];
   const taskId = stageTaskId(shot, stage);
@@ -1001,7 +1057,7 @@ async function generationTask(project, shot, stage = "video") {
     status: stageStatus(shot, stage),
     generator: stage === "video" ? "jimeng-cli" : modelConfig.provider,
     mediaType: stage === "video" ? "video" : "image",
-    requiresUserConfirmation: stage === "video",
+    requiresUserConfirmation: stage === "video" && !shot.videoConfirmedAt,
     duration: shot.duration,
     configKey: modelConfig.key,
     configName: modelConfig.name,

@@ -57,6 +57,8 @@ function shotSchema({ requireId = false } = {}) {
       videoConfigKey: { type: "string" },
       inputAssetRefs: { type: "array", items: { type: "string" } },
       subjectAssetRefs: { type: "array", items: { type: "string" } },
+      workflowStatus: { type: "string", enum: ["todo", "done", "needs_regen", "blocked"] },
+      tags: { type: "array", items: { type: "string" } },
       materialAssetRefs: { type: "array", items: { type: "string" } },
       storyboardAssetRef: { type: "string" },
       notes: { type: "string" }
@@ -546,7 +548,7 @@ async function callTool(id, params) {
     const summary = result.tasks.length === 0
       ? "No matching storyboard generation tasks."
       : result.tasks
-          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | user-confirmation: ${task.requiresUserConfirmation ? "required" : "not-required"} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.imageLabel || asset.usage || "ref"} ${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
+          .map((task) => `${task.taskId} | ${task.projectTitle} (${task.aspectRatio}) | shot ${task.shotIndex} | ${task.stageLabel || task.stage || "asset"} | ${task.generator} | ${task.mediaType} | ${task.status} | user-confirmation: ${task.requiresUserConfirmation ? "required" : "not-required"} | design: ${task.hasDesign ? task.designPath : "none"} | output: ${task.outputDir}\nassets: ${(task.inputAssets || []).map((asset) => `${asset.imageLabel || asset.audioLabel || asset.usage || "ref"} ${asset.name}:${asset.path}`).join(", ") || "none"}\nstoryboard: ${task.storyboardUrl || "none"}\n${task.compiledPrompt || task.visualPrompt}`)
           .join("\n\n");
     sendResult(id, {
       content: [{ type: "text", text: summary }],

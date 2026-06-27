@@ -18,7 +18,7 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
 
    If a required capability is unavailable, do not claim affected tasks. Report the missing capability and continue with tasks whose generators are available.
 
-3. Before running any Dreamina video generation command (`dreamina multimodal2video`, `image2video`, `text2video`, `frames2video`, or similar), show the user the final submission parameters in the current chat turn and wait for explicit confirmation. keep simple and key infos. Querying an existing `jimengSubmitId` with `dreamina query_result` does not require this extra confirmation.
+3. Video tasks queued by the storyboard app already include user confirmation. Do not ask for another chat confirmation before running Dreamina unless the command parameters conflict with the task, required inputs are missing, or the user explicitly asked to review before submitting. Keep any required confirmation concise.
 4. Prefer stage order when multiple stages are pending for the same project: `materials`, then `storyboard`, then `video`. Stages are not hard dependencies; process a later stage if it is queued even when prior outputs are absent.
 5. Process generation tasks in batches of up to 5 concurrent tasks. Start a new batch only after every task in the current batch has completed, failed, or been recorded as async `querying`.
 6. Before generating each task in a batch, call `claim_storyboard_generation_task` for that task. If a claim fails, skip only that task and continue with other tasks in the batch.
@@ -28,8 +28,9 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
    - `compiledPrompt` is an instruction packet for Codex/this skill, not necessarily the exact text to send to the image or video API.
    - If `promptPrefix` or `promptTemplates.fixedPrefix` is present, copy it verbatim to the very beginning of the final API prompt.
    - Treat `referenceTemplate` / `promptTemplates.referenceTemplate` as a strong recommended format. Rewrite it for the current shot, fill or remove placeholders, add concrete scene details, and delete sections that do not apply.
-   - For `video` tasks, treat `referenceTemplate` as a strong format constraint: preserve its structure, section order, style requirements, and negative controls as much as possible, and mainly fill in shot-specific story, camera/action details, and `@图片1` references.
+   - For `video` tasks, treat `referenceTemplate` as a strong format constraint: preserve its structure, section order, style requirements, and negative controls as much as possible, and mainly fill in shot-specific story, camera/action details, subject notes, and `@图片1` references.
    - Refer to images only with labels such as `@图片1`, `@图片2`, matching `inputAssets[].imageLabel` and input order exactly.
+   - If `compiledPrompt` includes a `主体参考` section, use it to constrain each subject's appearance, voice, personality, action, and performance. Subject notes are authoritative for the matching subject.
    - For `video` tasks with subject audio, bind each subject's audio to the subject the first time that subject is introduced with an image label. Use a compact form such as `主体A：@图片1，声音/台词参考：@音频1` or `主体A：@图片1，音色参考：@音频1`, matching the audio input order you will pass to Dreamina. If the same subject appears again later in the prompt, keep using the subject name and image label only; do not repeat the audio reference.
    - When multiple subjects have separate image/audio references, explicitly pair each first subject mention with its corresponding image label and audio label so Dreamina does not confuse voices between subjects. Do not attach an audio label to a different subject just because it appears nearby in `inputAssets`; infer pairings from asset names, aliases, `usage`, shot text, and project design only.
    - For `video` tasks, include a storyboard/`【分镜】` section only when a current-shot storyboard image is present in `inputAssets`. If no storyboard image is available, remove the entire storyboard/`【分镜】` module from the final API prompt instead of leaving an empty heading or generic text.
@@ -56,6 +57,7 @@ Use the exact absolute `outputDir` supplied by the task. Put downloaded Jimeng o
 
 - Do not mark a task complete until the exact local file has been visually or technically verified.
 - Video tasks may be batch-confirmed by the storyboard app; process queued video tasks in batches of up to 5 after they appear in the queue.
+- Minimize decision chatter: process queued tasks from the resolved task payload, and ask the user only for missing capabilities, mismatched submission parameters, or failures that require a new creative decision.
 - Preserve `projectId`, `aspectRatio`, `width`, `height`, and requested video `duration`.
 - Never guess, truncate, or partially read `DESIGN.md` when `hasDesign` is true.
 - Do not apply a DESIGN.md from the active workspace or another project.

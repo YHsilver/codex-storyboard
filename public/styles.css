@@ -424,7 +424,7 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1530px;
+  min-width: 1660px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -432,6 +432,7 @@ table {
 .col-index { width: 48px; }
 .col-roll { width: 108px; }
 .col-duration { width: 86px; }
+.col-workflow { width: 130px; }
 .col-visual { width: 240px; }
 .col-subjects { width: 200px; }
 .col-materials { width: 235px; }
@@ -555,6 +556,78 @@ input:focus-visible, textarea:focus-visible {
 .duration-input input::-webkit-outer-spin-button {
   margin: 0;
   appearance: none;
+}
+
+.workflow-cell {
+  display: grid;
+  gap: 10px;
+}
+.workflow-status-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+.workflow-status-select {
+  min-height: 30px;
+  border-color: color-mix(in srgb, var(--workflow-color, var(--line)) 34%, var(--line));
+  background: color-mix(in srgb, var(--workflow-color, var(--surface-raised)) 10%, var(--surface-raised));
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 650;
+}
+.workflow-status-field[data-status="todo"] { --workflow-color: #8b949e; }
+.workflow-status-field[data-status="done"] { --workflow-color: var(--green); }
+.workflow-status-field[data-status="needs_regen"] { --workflow-color: var(--orange); }
+.workflow-status-field[data-status="blocked"] { --workflow-color: #bd2c2c; }
+.shot-tag-box {
+  display: grid;
+  gap: 6px;
+}
+.shot-tag-list {
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.shot-tag {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px 3px 7px;
+  border: 1px solid #d7dde4;
+  border-radius: 999px;
+  background: #f3f6f8;
+  color: #46515d;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.shot-tag span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shot-tag button {
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 1px;
+  border-radius: 50%;
+  background: transparent;
+  color: #6d7782;
+  line-height: 1;
+}
+.shot-tag button:hover {
+  background: #dde5ec;
+  color: #1f2933;
+}
+.shot-tag-input {
+  min-height: 28px;
+  padding: 6px 7px;
+  font-size: 11px;
 }
 
 .select-trigger {
