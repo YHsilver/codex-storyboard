@@ -4,16 +4,6 @@
 
 你可以在网页里维护画面提示词、A-ROLL / B-ROLL、素材类型、输入物料和时长，再让 Codex 调用 Image Generation 或即梦 CLI 生成素材并自动回填。
 
-## 产品展示
-
-### 项目管理
-
-![Codex Storyboard 项目管理](docs/assets/codex-storyboard-projects.png)
-
-### 分镜工作台
-
-![Codex Storyboard 分镜工作台](docs/assets/codex-storyboard-workspace.png)
-
 ## 功能
 
 - 多项目管理：新建、重命名、打开和删除项目
