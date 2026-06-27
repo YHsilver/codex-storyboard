@@ -28,9 +28,9 @@ Process the local storyboard queue at `http://127.0.0.1:43218`.
    - `compiledPrompt` is an instruction packet for Codex/this skill, not necessarily the exact text to send to the image or video API.
    - If `promptPrefix` or `promptTemplates.fixedPrefix` is present, copy it verbatim to the very beginning of the final API prompt.
    - Treat `referenceTemplate` / `promptTemplates.referenceTemplate` as a strong recommended format. Rewrite it for the current shot, fill or remove placeholders, add concrete scene details, and delete sections that do not apply.
-   - For `video` tasks, treat `referenceTemplate` as a strong format constraint: preserve its structure, section order, style requirements, and negative controls as much as possible, and mainly fill in shot-specific story, camera/action details, and `[图1]` references.
-   - Refer to images only with labels such as `[图1]`, `[图2]`, matching `inputAssets[].imageLabel` and input order exactly.
-   - For `video` tasks with subject audio, bind each subject's audio to the subject the first time that subject is introduced with an image label. Use a compact form such as `主体A：[图1]，声音/台词参考：@音频1` or `主体A：[图1]，音色参考：@音频1`, matching the audio input order you will pass to Dreamina. If the same subject appears again later in the prompt, keep using the subject name and image label only; do not repeat the audio reference.
+   - For `video` tasks, treat `referenceTemplate` as a strong format constraint: preserve its structure, section order, style requirements, and negative controls as much as possible, and mainly fill in shot-specific story, camera/action details, and `@图片1` references.
+   - Refer to images only with labels such as `@图片1`, `@图片2`, matching `inputAssets[].imageLabel` and input order exactly.
+   - For `video` tasks with subject audio, bind each subject's audio to the subject the first time that subject is introduced with an image label. Use a compact form such as `主体A：@图片1，声音/台词参考：@音频1` or `主体A：@图片1，音色参考：@音频1`, matching the audio input order you will pass to Dreamina. If the same subject appears again later in the prompt, keep using the subject name and image label only; do not repeat the audio reference.
    - When multiple subjects have separate image/audio references, explicitly pair each first subject mention with its corresponding image label and audio label so Dreamina does not confuse voices between subjects. Do not attach an audio label to a different subject just because it appears nearby in `inputAssets`; infer pairings from asset names, aliases, `usage`, shot text, and project design only.
    - For `video` tasks, include a storyboard/`【分镜】` section only when a current-shot storyboard image is present in `inputAssets`. If no storyboard image is available, remove the entire storyboard/`【分镜】` module from the final API prompt instead of leaving an empty heading or generic text.
    - Do not read image/audio file contents to understand references. Use only file names, asset names, `usage`, `imageLabel`, shot text, and DESIGN.md when present.
@@ -67,6 +67,21 @@ Use the exact absolute `outputDir` supplied by the task. Put downloaded Jimeng o
 # 即梦 CLI 使用说明
 
 本文根据本机 `dreamina -h` 以及常用 `dreamina <subcommand> -h` 输出整理。
+
+## 基础信息
+
+`dreamina` 是即梦官方 AIGC CLI，用于登录、账号查询、任务查询和生成工作流。
+
+基本流程：
+
+```bash
+dreamina text2image --prompt="a cat portrait"
+dreamina query_result --submit_id=<submit_id> --download_dir=<output_dir>
+```
+
+所有生成操作都会消耗点数。生成任务是异步任务，大多数生成命令支持 `--poll`，用于提交后短时间轮询；如果未完成，再用 `query_result` 查询。
+- - post-TNS check did not pass ：这是视频审核未通过，需要修改提示词
+
 
 ## 视频生成
 
