@@ -1,62 +1,62 @@
 ---
 name: process-storyboard-tasks
-description: Process pending or resumable Codex Storyboard image and video generation tasks. Use when the user asks to generate storyboard assets, process the storyboard queue, generate all shots, generate a specific storyboard row, resume interrupted generation, or return Image Generation or Jimeng CLI outputs to the local storyboard.
+description: 处理待执行或可恢复的 Codex Storyboard 图片和视频生成任务。当用户要求生成分镜资产、处理分镜队列、生成全部镜头、生成指定分镜行、恢复中断的生成，或把 Image Generation / Jimeng CLI 输出写回本地分镜时使用。
 ---
 
-# Process Codex Storyboard Tasks
+# 处理 Codex Storyboard 任务
 
-Process the local storyboard queue at `http://127.0.0.1:43218`.
+处理 `http://127.0.0.1:43218` 上的本地分镜队列。
 
-## Required References
+## 必读参考
 
-- When any task uses `jimeng-cli`, read `references/dreamina-cli.md` before building or running Dreamina commands.
+- 任一任务使用 `jimeng-cli` 时，在构建或运行 Dreamina 命令前必须阅读 `references/dreamina-cli.md`。
 
-## Workflow
+## 工作流程
 
-1. Call `list_storyboard_generation_tasks` with `status: "processing,pending"` and `includePrompt: false`.
-2. Resume processing tasks first when `canResume: true` and `jimengSubmitId` is present. Query the current submit ID and complete the task only from the current downloaded local file.
-3. Then process pending tasks in stage order: `materials`, `storyboard`, `video`. Stages are not hard dependencies; process a later stage if it is queued.
-4. Verify the capability required by each task before claiming it:
+1. 调用 `list_storyboard_generation_tasks`，传入 `status: "processing,pending"` 和 `includePrompt: false`。
+2. 当 `canResume: true` 且存在 `jimengSubmitId` 时，优先恢复 processing 任务。查询当前 submit ID，并且只能使用本次下载到本地的当前文件完成任务。
+3. 然后按阶段顺序处理 pending 任务：`materials`、`storyboard`、`video`。这些阶段不是硬依赖；如果后续阶段已入队，也应处理。
+4. 在认领任务前，核验每个任务需要的能力：
 
-   - `image-gen` requires the built-in Image Generation tool.
-   - `jimeng-cli` requires the local `dreamina` command. `dreamina -h`, `dreamina version`, and `dreamina user_credit` may be used for capability checks.
+   - `image-gen` 需要内置 Image Generation 工具。
+   - `jimeng-cli` 需要本地 `dreamina` 命令。`dreamina -h`、`dreamina version` 和 `dreamina user_credit` 可用于能力检查。
 
-5. For tasks selected for a batch, call `list_storyboard_generation_tasks` again with `taskId`, `includePrompt: true`, and the current status before claim/resume so the complete prompt payload is available.
-6. Process up to 5 concurrent tasks per batch. Start a new batch only after every task in the current batch has completed, failed, or has been recorded as async processing with `jimengSubmitId`.
-7. Before generating a pending task, call `claim_storyboard_generation_task` with a `workerId` and a practical `leaseSeconds`. If claim fails, skip only that task.
-8. If a claimed task has `hasDesign: true`, read the complete Markdown file at the exact absolute `designPath` before generating anything.
-9. Build the final API prompt from `compiledPrompt`, `promptPrefix`, `referenceTemplate`, `inputAssets`, `subjectPairs`, `commandPlan`, and DESIGN.md when present:
+5. 对选入批次的任务，在 claim/resume 前再次调用 `list_storyboard_generation_tasks`，传入 `taskId`、`includePrompt: true` 和当前状态，确保拿到完整的 prompt payload。
+6. 每批最多并发处理 5 个任务。只有当前批次的每个任务都已完成、失败，或已记录为带 `jimengSubmitId` 的异步处理中状态后，才能开始新批次。
+7. 生成 pending 任务前，调用 `claim_storyboard_generation_task`，传入 `workerId` 和合理的 `leaseSeconds`。如果认领失败，只跳过该任务。
+8. 如果已认领任务有 `hasDesign: true`，在生成任何内容前，必须读取精确绝对路径 `designPath` 指向的完整 Markdown 文件。
+9. 在存在 DESIGN.md 时，基于 `compiledPrompt`、`promptPrefix`、`referenceTemplate`、`inputAssets`、`subjectPairs`、`commandPlan` 和 DESIGN.md 构建最终 API prompt：
 
-   - `compiledPrompt` is an instruction packet for this skill, not necessarily the exact text to send to the image or video API.
-   - If `promptPrefix` or `promptTemplates.fixedPrefix` is present, copy it verbatim to the beginning of the final API prompt.
-   - Treat `referenceTemplate` as a strong recommended format. For video tasks, preserve its structure, section order, style requirements, and negative controls as much as possible.
-   - Refer to images and audio only with labels such as `@图片1` and `@音频1`, matching `inputAssets` order exactly.
-   - Use `subjectPairs` to bind subject images and audio. Do not attach audio to a different subject just because it appears nearby in `inputAssets`.
-   - Include a storyboard or `【分镜】` section only when a current-shot storyboard image is present in `inputAssets`.
-   - Do not read image/audio file contents to understand references. Use file names, asset names, usage, labels, shot text, subject notes, and DESIGN.md.
+   - `compiledPrompt` 是给本 skill 的指令包，不一定是要原样发送给图片或视频 API 的文本。
+   - 如果存在 `promptPrefix` 或 `promptTemplates.fixedPrefix`，将其逐字复制到最终 API prompt 的开头。
+   - 将 `referenceTemplate` 视为强推荐格式。对视频任务，应尽量保留其结构、章节顺序、风格要求和负面控制。
+   - 只能用 `@图片1`、`@音频1` 等标签引用图片和音频，并且必须严格匹配 `inputAssets` 顺序。
+   - 使用 `subjectPairs` 绑定主体图片和音频。不要因为音频在 `inputAssets` 中位置相近，就把它附加到其他主体上。
+   - 只有当 `inputAssets` 中存在当前镜头的 storyboard 图片时，才包含 storyboard 或 `【分镜】` 章节。
+   - 不要读取图片/音频文件内容来理解参考素材。应使用文件名、资产名、用途、标签、镜头文本、主体备注和 DESIGN.md。
 
-10. Route by `stage`, `generator`, and `mediaType`:
+10. 按 `stage`、`generator` 和 `mediaType` 路由处理：
 
-   - `materials`: generate only missing material references for the current shot. If subject/person references already exist in `inputAssets` or the stage goal says a subject exists, do not generate any character/person/subject image. If the stage goal says the scene/background is missing, generate a clean empty establishing scene/background image with no people, no subjects, no text, and no watermark. Complete with `mediaType: "image"` and useful `assetName`, `tags`, or `aliases`.
-   - `storyboard`: generate the key storyboard frame for the current shot only. Complete with `mediaType: "image"`.
-   - `video`: always use `dreamina multimodal2video`, pass the current task's image/audio inputs, final prompt, model version, duration, ratio, video resolution, poll value, and output directory. The `--ratio` value must match `aspectRatio`.
-   - For non-video `image-gen` tasks, use Image Generation, honor `aspectRatio`, and use `inputAssets` as references when supported.
-   - For non-video `jimeng-cli` tasks, use `text2image` with no image inputs and `image2image` with image inputs.
+   - `materials`：只生成当前镜头缺失的素材参考。如果 `inputAssets` 中已有主体/人物参考，或阶段目标说明主体已存在，不要生成任何角色/人物/主体图片。如果阶段目标说明场景/背景缺失，生成干净的空镜/背景图，不能有人、主体、文字或水印。完成时使用 `mediaType: "image"`，并提供有用的 `assetName`、`tags` 或 `aliases`。
+   - `storyboard`：只生成当前镜头的关键分镜帧。完成时使用 `mediaType: "image"`。
+   - `video`：始终使用 `dreamina multimodal2video`，传入当前任务的图片/音频输入、最终 prompt、模型版本、时长、比例、视频分辨率、poll 值和输出目录。`--ratio` 值必须匹配 `aspectRatio`。
+   - 对非视频 `image-gen` 任务，使用 Image Generation，遵守 `aspectRatio`，并在支持时把 `inputAssets` 作为参考。
+   - 对非视频 `jimeng-cli` 任务，无图片输入时使用 `text2image`，有图片输入时使用 `image2image`。
 
-11. If Jimeng returns a finished local file, verify it and call `complete_storyboard_generation_task`.
-12. If Jimeng returns async/querying with `submit_id`, call `update_storyboard_generation_task` with `jimengSubmitId`; later resume by querying that same submit ID and completing from the downloaded local file.
-13. If generation or verification fails, call `fail_storyboard_generation_task` with a concise cause.
-14. Continue until no processable pending or resumable processing tasks remain.
+11. 如果 Jimeng 返回已完成的本地文件，先验证该文件，再调用 `complete_storyboard_generation_task`。
+12. 如果 Jimeng 返回带 `submit_id` 的 async/querying 状态，调用 `update_storyboard_generation_task` 写入 `jimengSubmitId`；之后通过查询同一个 submit ID 恢复，并用下载到本地的文件完成任务。
+13. 如果生成或验证失败，调用 `fail_storyboard_generation_task` 并提供简洁原因。
+14. 持续处理，直到没有可处理的 pending 任务或可恢复的 processing 任务。
 
-## Output Locations
+## 输出位置
 
-Use the exact absolute `outputDir` supplied by the task. Put downloaded Jimeng outputs and temporary prompt files in that directory. The MCP completion tool copies the final image or video into the storyboard media directory.
+使用任务提供的精确绝对路径 `outputDir`。将下载的 Jimeng 输出和临时 prompt 文件放入该目录。MCP 完成工具会把最终图片或视频复制到 storyboard media 目录。
 
-## Guardrails
+## 约束
 
-- Do not mark a task complete until the exact local file has been visually or technically verified.
-- Do not complete a video task from an existing project video, previous `mediaUrl`, previous `mediaUrls`, or a stale `jimengSubmitId`.
-- Preserve `projectId`, `aspectRatio`, `width`, `height`, and requested video `duration`.
-- Never guess, truncate, or partially read `DESIGN.md` when `hasDesign` is true.
-- Do not apply a DESIGN.md from the active workspace or another project.
-- When reporting Jimeng failures, include the confirmed command, error summary, CLI version if available, and mention logs under `~/.dreamina_cli/logs/`.
+- 在精确的本地文件完成视觉或技术验证前，不要将任务标记为完成。
+- 不要用现有项目视频、之前的 `mediaUrl`、之前的 `mediaUrls` 或过期的 `jimengSubmitId` 完成视频任务。
+- 保留 `projectId`、`aspectRatio`、`width`、`height` 和请求的视频 `duration`。
+- 当 `hasDesign` 为 true 时，绝不能猜测、截断或只读取部分 `DESIGN.md`。
+- 不要套用当前工作区或其他项目的 DESIGN.md。
+- 报告 Jimeng 失败时，应包含确认过的命令、错误摘要、可用时的 CLI 版本，并提及 `~/.dreamina_cli/logs/` 下的日志。

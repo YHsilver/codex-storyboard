@@ -1,69 +1,205 @@
 ---
 name: manage-storyboard-projects
-description: Create, find, inspect, update, or delete Codex Storyboard projects directly through MCP. Use when the user asks Codex to write a new video script or storyboard into the local storyboard app, add or revise shots, rename a project, change its aspect ratio, find an existing project, or delete one without browser automation.
+description: 通过 MCP 直接创建、查找、查看、更新或删除 Codex Storyboard 项目。当用户要求 Codex 将新的视频脚本或分镜写入本地 storyboard 应用、添加或修改镜头、重命名项目、修改画幅比例、查找已有项目，或在不使用浏览器自动化的情况下删除项目时使用。
 ---
 
-# Manage Storyboard Projects
+# 管理 Storyboard 项目
 
-Use the Codex Storyboard MCP project tools. Never control the browser and never edit `data/` files directly.
+使用 Codex Storyboard MCP 项目工具。不要控制浏览器，也不要直接编辑 `data/` 文件。
 
-## Create a project
+## 创建项目
 
-1. Turn the user's request into a complete shot list before calling the tool.
-2. When the project should use specific model configurations, set `materialConfigKey`, `storyboardConfigKey`, and/or `videoConfigKey`; use per-shot stage keys only when a shot intentionally differs.
-3. Call `create_storyboard_project` once with the project title, aspect ratio, all shots, and optional absolute `designPath`.
-4. Do not create shots one at a time.
-5. Return the created project ID and tell the user to refresh or open the storyboard.
+1. 调用工具前，先将用户需求整理成完整镜头列表。用户提供原始剧情、短剧脚本或要求制作分镜时，必须先按“短剧分镜制作流程”拆分剧情。
+2. 当项目需要使用特定模型配置时，设置 `materialConfigKey`、`storyboardConfigKey` 和/或 `videoConfigKey`；只有某个镜头刻意不同，才使用逐镜头阶段 key。
+3. 使用项目标题、画幅比例、全部镜头，以及可选的绝对路径 `designPath`，一次性调用 `create_storyboard_project`。
+4. 不要逐个创建镜头。
+5. 返回创建出的项目 ID，并告诉用户刷新或打开 storyboard。
 
-When drafting shots, write each `visualPrompt` in this order: location, shot size, story action, camera movement. The story action section should include any dialogue, sound, subtitles, or timing cues that affect the shot; do not split dialogue into a separate section.
+## 短剧分镜制作流程
 
-Each shot should include:
+当用户要求根据原始剧情生成短剧分镜时，你是一名短剧分镜导演。目标是把原始剧情拆成适合竖屏短剧节奏的视频分镜，而不是简单摘要。
 
-- `rollType`: `A-ROLL` for primary presentation or spoken footage; `B-ROLL` for supporting visuals.
-- `duration`: seconds.
-- `visualPrompt`: concrete visual description used for asset generation, formatted as location, shot size, story action, and camera movement; include dialogue, sound, subtitles, and motion notes inside the story action when relevant.
-- `materialConfigKey`: optional image model override for the material-image stage.
-- `storyboardConfigKey`: optional image model override for the storyboard-image stage.
-- `videoConfigKey`: optional video model override for the final video stage.
-- `inputAssetRefs`: optional material library asset IDs to use as references.
-- `subjectAssetRefs`: optional subject material IDs for recurring people; subject images may be used for material/storyboard generation, and subject images/audio should be used for video generation.
-- `workflowStatus`: optional manual production status, one of `todo`, `done`, `needs_regen`, or `blocked`.
-- `tags`: optional manual shot tags for tracking and filtering.
-- `materialAssetRefs`: optional image material library asset IDs to show as material-image outputs.
-- `storyboardAssetRef`: optional image material library asset ID to use as the storyboard output.
-- `notes`: editing, pacing, transition, or production notes.
+拆分原则：
 
-Final shot output is always video. Material images and storyboard images are independent stage outputs; if they exist or are selected from the material library, the server automatically carries them into later generation tasks.
+- 每个镜头时长不超过 15 秒，优先控制在 10-15 秒；台词密集或情绪复杂时拆成更多镜头，不要让单个镜头信息过载。
+- 镜头时长必须按“语速标准”和台词字数估算；超长台词必须拆分，不能为了保留整段对白而突破 15 秒。
+- 保留原剧情的核心冲突、人物关系、爽点、反转、高光和情绪递进。
+- 禁止删改原文台词。只有原文明显不通顺时才可微调，并必须在 `notes` 中说明修改原因和修改点。
+- 对话镜头和空镜、环境交代镜头尽可能分开。
+- 同一场景内可用“中景交代关系 + 近景强化台词 + 特写放大情绪”的方式拆分。
+- 原始剧情过长时，优先保证主线清晰，不要平均分配篇幅。
+- 竖屏短剧默认使用紧凑推进、明确情绪钩子和清晰人物站位。
 
-When a project should use recurring characters or voices, call `list_storyboard_assets` first and set matching subject image/audio IDs in `subjectAssetRefs`. Put scene, style, prop, and other non-subject references in `inputAssetRefs`. The storyboard server also auto-references library assets by name, person name, alias, and tag when generation tasks are queued.
+### 语速与时长计算
 
-## Find and inspect
+拆分镜头前，先按台词情绪选择语速，并用“单句时长 = 字数 / 语速”估算对白占用时间。标点不计入字数；明显停顿、动作反应、转身、对视、沉默、哭笑、摔物等表演节拍需要额外预留 1-3 秒。
 
-- Use `list_storyboard_projects` first when the project ID is unknown. Pass `query` when the user gives a title.
-- Use `get_storyboard_project` only when complete shot content is needed.
-- Do not fetch every full project merely to find one title.
+| 类型 | 语速 | 适用场景 |
+| --- | ---: | --- |
+| 舒缓抒情温柔对话 | 3.0 字/秒 | 浪漫场景 |
+| 沉思安静内心独白 | 3.2 字/秒 | 内心独白、回忆 |
+| 默认正常情节对白 | 4.4 字/秒 | 日常对话 |
+| 剧情推进对话 | 4.6 字/秒 | 情节发展 |
+| 客观叙事旁白 | 4.8 字/秒 | 旁白叙述，无停顿、无情绪起伏，语速最匀 |
+| 紧张对峙激烈冲突 | 5.0 字/秒 | 对峙、争吵 |
+| 慌乱惊恐急促情绪 | 5.5 字/秒 | 逃跑、惊恐 |
 
-## Update
+时长规则：
 
-Use one `update_storyboard_project` call:
+- 单句时长 = 台词字数 / 对应语速。
+- 单个镜头总时长 = 台词时长 + 必要动作/反应/转场时间。
+- 超长台词只要超过 48 字，或按语速计算超过 15 秒，必须拆成多个镜头或多个子分镜。
+- 多人对话要按句轮换拆分，优先用近景/特写承接说话人和听话人的反应，不要把长段对话塞进一个镜头。
+- `duration` 必须使用计算后的建议时长，向上取整到秒；仍不得超过 15 秒。
 
-- `title` or `aspectRatio` for project metadata.
-- `materialConfigKey`, `storyboardConfigKey`, or `videoConfigKey` for project stage defaults.
-- `appendShots` for new shots.
-- `shotUpdates` for specific existing shots.
-- `deleteShotIds` for removed shots.
-- `designPath` to import or replace DESIGN.md.
-- `removeDesign: true` to remove it.
+### 空间状态追踪
 
-Fetch the complete project first only when shot IDs or existing content are required.
+拆分镜头前，必须先做空间状态追踪，确保场景、人物位置和镜头轴线连续。空间信息不足时，可以合理补足，但必须在 `notes` 标记“空间为合理补足，原文未明示”。
 
-## Delete
+流程：
 
-Project deletion permanently removes the project and its local media. Ask for explicit confirmation immediately before calling `delete_storyboard_project`.
+1. 通读原文，识别所有场景。
+2. 逐句标记原文中的位置描述。
+3. 记录每个角色的初始位置，并附原文依据。
+4. 标记剧情推进中的走位，并附原文依据。
+5. 按段落拆分，记录段首/段尾位置。
+6. 建立段落间位置传递链，确保下一段继承上一段的合理位置状态。
+7. 填写防越轴检查，确认人物左右关系、视线方向、进出画方向和镜头轴线不冲突。
 
-## Token discipline
+空间状态追踪表模板：
 
-- Create the complete project with one MCP call.
-- Prefer project summaries over full project reads.
-- Return concise results instead of repeating the full script after it has been written.
-- When user intent is clear, choose reasonable `workflowStatus` and `tags` directly instead of asking another decision question.
+| 段落 | 场景 | 角色 A 位置（原文依据） | 角色 B 位置（原文依据） | 位置传递 / 走位说明 |
+| ---: | --- | --- | --- | --- |
+| 1 | 场景名 | 位置 + “原文” | 位置 + “原文” | 段首位置、段尾位置、下一段如何继承 |
+| 2 | 场景名 | 位置 + “原文” | 位置 + “原文” | 从上一段位置延续或说明移动依据 |
+
+防越轴检查表模板：
+
+| 段落 | 轴线关系 | 角色左右关系 | 视线方向 | 进出画方向 | 检查结果 |
+| ---: | --- | --- | --- | --- | --- |
+| 1 | 例如 A-B 对话轴线 / 门口-室内行动轴线 | A 在画面左，B 在画面右 | A 看向右，B 看向左 | A 从左入画或向右移动 | 连续 / 需调整 |
+
+空间信息写入规则：
+
+- 子分镜的“构图”必须体现人物站位、镜头位置、视线方向和必要的进出画方向。
+- `notes` 必须记录关键位置依据、段落间位置传递、是否存在合理补足，以及防越轴检查结果。
+- 如果镜头需要故意打破轴线制造混乱、压迫或反转，必须在 `notes` 明确说明这是有意设计。
+
+先在内部形成 Markdown 分镜表，再映射为 MCP shots。分镜表字段必须覆盖：
+
+- 编号：镜头序号，如 1、2、3。
+- 标题 / 主要剧情：用一句话概括该镜头的剧情功能。
+- 对应原文：该镜头对应的原始剧情内容，原封不动引用，不要修改。
+- 时长：根据语速和台词字数计算后的建议时长，控制在 10-15 秒内，最长不超过 15 秒。
+- 分镜描述：每个镜头必须拆成 1-4 个子分镜。
+- 备注：说明台词是否修改、镜头是否合并、节奏是否加快、是否需要重点表演、是否是爽点 / 反转 / 高光镜头。
+
+每个“分镜描述”必须按以下结构组织。写入项目时，将这些内容完整放进 `visualPrompt` 的【情节】段落，并保留时间段、景别、画面内容、运镜手法和构图：
+
+```text
+子分镜一：00:00-00:08
+景别：写清楚景别，例如大全景、中景、中近景、近景、特写、极近特写。
+画面内容：写清楚场景、人物、动作、情绪、台词、道具和视觉重点。
+运镜手法：写清楚推、拉、摇、移、跟拍、固定机位、手持、快速切换等；如果是静态镜头，写固定机位。
+构图：人物站位，镜头位置。
+
+子分镜二：00:08-00:15
+景别：
+画面内容：
+运镜手法：
+构图：
+```
+
+映射到 storyboard 项目字段时：
+
+- `duration` 使用分镜表的时长秒数。
+- `visualPrompt` 必须使用“固定 visualPrompt 模板”。不要改名、删减或重排模板段落。
+- `notes` 写入“对应原文”、语速类型、字数、时长计算、备注、是否修改台词、是否合并镜头、是否加快节奏、是否重点表演、是否爽点 / 反转 / 高光、空间状态依据和防越轴检查结果。
+- `rollType` 默认使用 `A-ROLL`；纯环境、道具、氛围、转场或无人物辅助画面使用 `B-ROLL`。
+- `tags` 可直接标记 `短剧`、`竖屏`、`爽点`、`反转`、`高光`、`冲突`、`情绪递进`、`空镜` 等有助于后续筛选的标签。
+
+## 固定 visualPrompt 模板
+
+每个镜头的 `visualPrompt` 必须严格使用以下模板。方括号和尖括号内内容按当前镜头替换或补充；没有对应参考图时保留段落标题，并写“无明确参考，按剧情描述生成”。所有剧情动作、台词、声音、字幕、道具、情绪、节奏提示、镜头运动、构图和 1-4 个子分镜都写入【情节】。
+
+```text
+【主体】：@[主体图]，可补充
+
+【场景】：@[背景图]，可补充
+
+【情节】：《粘贴镜头描述》
+
+【分镜】
+参考分镜图: @[分镜图]。
+只把它当作镜头顺序和站位参考，人物造型以主体和描述为准。不要把分镜图本身生成进画面。不要生成宫格边框、文字标签、说明线、指示线、水印。
+
+【氛围与画质】：
+写实真人短剧风格，日系电影风格，生活流，纪录片视角，逼真质感，高级纹理。浅景深，背景虚化且有美丽的光斑。具有 35 毫米胶片的美学风格，镜头移动缓慢且流畅。浅景深，柔和电影灯光，写实色彩分级，人物表演克制真实，极致逼真，Photorealism-真人实景拍摄，4K 分辨率。
+# 室外场景（冷调、静谧、冬日纪实）
+冷色调分级与柔和色调，阴天的柔和自然日光。营造出宁静、平和与静谧的氛围。具有 35 毫米胶片的美学质感，画面逼真写实。
+
+# 室内场景（暖调、怀旧、故事特写）
+一段电影质感的视频，采用温暖的琥珀色色调分级，柔和的室内钨丝灯光营造出怀旧且宁静的氛围。浅景深搭配美丽的虚化光斑。
+
+【否定控制】：
+无字幕，无屏幕文字，无背景音乐，无卡通，无动漫，杜绝游戏 CG 感，无水印，禁止出现品牌 logo
+```
+
+模板填写规则：
+
+- 【主体】优先使用 `subjectAssetRefs` 对应的主体人物或声音参考；没有主体参考时，用文字补充人物身份、年龄、造型、情绪和表演状态。
+- 【场景】优先使用 `inputAssetRefs` 中的背景、场景或环境参考；没有背景参考时，用文字补充地点、时间、天气、光线、陈设和空间关系。
+- 【情节】先写“地点、景别、故事动作、镜头运动”的总述，再写 1-4 个子分镜。故事动作中必须包含原文台词、声音、字幕、道具、情绪和节奏提示。
+- 【分镜】只有存在分镜参考图时才写具体 `@[分镜图]`；没有分镜参考图时写“参考分镜图：无明确参考，按【情节】中的子分镜生成。”并保留后续约束句。
+- 【氛围与画质】和【否定控制】必须逐字保留，除非用户明确要求修改风格。
+
+每个镜头应包含：
+
+- `rollType`：`A-ROLL` 表示主要讲述或出镜口播素材；`B-ROLL` 表示辅助画面。
+- `duration`：秒数。
+- `visualPrompt`：用于资产生成的具体视觉描述，必须使用固定 visualPrompt 模板；相关时，将对白、声音、字幕、道具、情绪、构图、子分镜和运动备注写入【情节】。
+- `materialConfigKey`：可选，用于覆盖 material-image 阶段的图片模型。
+- `storyboardConfigKey`：可选，用于覆盖 storyboard-image 阶段的图片模型。
+- `videoConfigKey`：可选，用于覆盖最终 video 阶段的视频模型。
+- `inputAssetRefs`：可选，用作参考的素材库资产 ID。
+- `subjectAssetRefs`：可选，用于复现人物的主体素材 ID；主体图片可用于 material/storyboard 生成，主体图片/音频应当用于 video 生成。
+- `workflowStatus`：可选，手动生产状态，取值为 `todo`、`done`、`needs_regen` 或 `blocked`。
+- `tags`：可选，用于跟踪和筛选的手动镜头标签。
+- `materialAssetRefs`：可选，作为 material-image 输出展示的图片素材库资产 ID。
+- `storyboardAssetRef`：可选，用作 storyboard 输出的图片素材库资产 ID。
+- `notes`：剪辑、节奏、转场或制作备注。
+
+最终镜头输出始终是视频。素材图片和分镜图片是独立阶段输出；如果它们已存在或从素材库中选中，服务器会自动将它们带入后续生成任务。
+
+当项目需要使用复现角色或声音时，先调用 `list_storyboard_assets`，并在 `subjectAssetRefs` 中设置匹配的主体图片/音频 ID。将场景、风格、道具和其他非主体参考放入 `inputAssetRefs`。生成任务入队时，storyboard 服务器也会按名称、人物名、别名和标签自动引用素材库资产。
+
+## 查找与查看
+
+- 项目 ID 未知时，先使用 `list_storyboard_projects`。当用户给出标题时，传入 `query`。
+- 只有需要完整镜头内容时，才使用 `get_storyboard_project`。
+- 不要为了查找某个标题而获取每个项目的完整内容。
+
+## 更新
+
+使用一次 `update_storyboard_project` 调用：
+
+- `title` 或 `aspectRatio` 用于项目元数据。
+- `materialConfigKey`、`storyboardConfigKey` 或 `videoConfigKey` 用于项目阶段默认值。
+- `appendShots` 用于新增镜头。
+- `shotUpdates` 用于指定已有镜头更新。
+- `deleteShotIds` 用于删除镜头。
+- `designPath` 用于导入或替换 DESIGN.md。
+- `removeDesign: true` 用于移除它。
+
+只有需要镜头 ID 或现有内容时，才先获取完整项目。
+
+## 删除
+
+删除项目会永久移除项目及其本地媒体。调用 `delete_storyboard_project` 前，必须立即请求明确确认。
+
+## Token 使用约束
+
+- 使用一次 MCP 调用创建完整项目。
+- 优先使用项目摘要，而不是读取完整项目。
+- 写入完成后，返回简洁结果，不要重复完整脚本。
+- 当用户意图明确时，直接选择合理的 `workflowStatus` 和 `tags`，不要再追加决策问题。
