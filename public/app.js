@@ -523,10 +523,9 @@ function renderMediaOutputs(container, shot, index, stage) {
 
 function renderStageProduct(container, shot, index, stage) {
   container.replaceChildren();
-  container.tabIndex = stage === "materials" || stage === "storyboard" ? 0 : -1;
+  container.tabIndex = 0;
   container.setAttribute("aria-label", `${stageInfo(shot, stage).label}，聚焦后可粘贴上传文件`);
   container.onpaste = async (event) => {
-    if (stage !== "materials" && stage !== "storyboard") return;
     const file = pastedFileForStage(event, stage);
     if (!file) return;
     event.preventDefault();
@@ -591,7 +590,13 @@ async function uploadMedia(file) {
 }
 
 function pastedFileForStage(event, stage) {
-  const files = [...(event.clipboardData?.files || [])];
+  const files = [
+    ...(event.clipboardData?.files || []),
+    ...(event.clipboardData?.items || [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter(Boolean)
+  ];
   if (stage === "video") return files.find((file) => file.type.startsWith("video/"));
   return files.find((file) => file.type.startsWith("image/"));
 }

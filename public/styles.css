@@ -424,21 +424,21 @@ button:disabled { cursor: not-allowed; }
 
 table {
   width: 100%;
-  min-width: 1590px;
+  min-width: 2078px;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
 }
 .col-index { width: 48px; }
-.col-roll { width: 108px; }
+.col-roll { width: 96px; }
 .col-duration { width: 86px; }
-.col-visual { width: 240px; }
-.col-subjects { width: 200px; }
-.col-materials { width: 235px; }
-.col-storyboard { width: 235px; }
-.col-video { width: 235px; }
-.col-notes { width: 95px; }
-.col-workflow { width: 60px; }
+.col-visual { width: 360px; }
+.col-subjects { width: 210px; }
+.col-materials { width: 260px; }
+.col-storyboard { width: 260px; }
+.col-video { width: 280px; }
+.col-notes { width: 280px; }
+.col-workflow { width: 150px; }
 .col-actions { width: 48px; }
 
 th {
@@ -727,13 +727,12 @@ input:focus-visible, textarea:focus-visible {
 }
 .stage-output-list {
   width: 100%;
-  max-height: 148px;
-  overflow: auto;
+  overflow: visible;
   display: grid;
   gap: 8px;
 }
 .stage-output-list.is-gallery {
-  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
   align-content: start;
 }
 .stage-output-list.is-gallery .preview-frame,
