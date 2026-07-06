@@ -35,6 +35,7 @@ const lightboxStage = document.querySelector("#lightbox-stage");
 const toast = document.querySelector("#toast");
 const themeButtons = document.querySelectorAll("[data-theme-toggle]");
 const themeStorageKey = "codex-storyboard-theme";
+const generationStages = ["materials", "storyboard", "video"];
 
 const ratios = ["9:16", "16:9", "3:4", "4:3", "1:1"];
 const selectOptions = {
@@ -63,6 +64,7 @@ let editingProjectId = "";
 let deletingProjectId = "";
 let uploadShotId = "";
 let uploadStage = "video";
+let pasteUploadTarget = null;
 let lightboxShotId = "";
 let lightboxStageName = "video";
 let toastTimer;
@@ -440,7 +442,8 @@ function renderStagePreview({ url, stage, shot, index, assetId = "", deletable =
       video: "未生成视频"
     }[stage];
     preview.append(empty);
-    preview.disabled = true;
+    preview.classList.add("is-uploadable");
+    preview.addEventListener("click", () => chooseUpload(shot.id, stage));
     return frame;
   }
 
@@ -524,11 +527,28 @@ function renderMediaOutputs(container, shot, index, stage) {
 function renderStageProduct(container, shot, index, stage) {
   container.replaceChildren();
   container.tabIndex = 0;
+  container.dataset.shotId = shot.id;
+  container.dataset.stage = stage;
   container.setAttribute("aria-label", `${stageInfo(shot, stage).label}，聚焦后可粘贴上传文件`);
+  const rememberPasteTarget = () => {
+    pasteUploadTarget = { shotId: shot.id, stage };
+  };
+  container.addEventListener("pointerdown", rememberPasteTarget);
+  container.addEventListener("focusin", rememberPasteTarget);
   container.onpaste = async (event) => {
-    const file = pastedFileForStage(event, stage);
+    let file = null;
+    try {
+      file = await pastedFileForStage(event, stage);
+    } catch (error) {
+      event.preventDefault();
+      event.stopPropagation();
+      showToast(error.message, "error");
+      return;
+    }
     if (!file) return;
     event.preventDefault();
+    event.stopPropagation();
+    rememberPasteTarget();
     await uploadStageFile(shot.id, stage, file);
   };
   const meta = stageConfigMeta(stage);
@@ -589,16 +609,80 @@ async function uploadMedia(file) {
   await uploadStageFile(uploadShotId, uploadStage, file);
 }
 
-function pastedFileForStage(event, stage) {
-  const files = [
-    ...(event.clipboardData?.files || []),
-    ...(event.clipboardData?.items || [])
+function clipboardFiles(event) {
+  return [
+    ...Array.from(event.clipboardData?.files || []),
+    ...Array.from(event.clipboardData?.items || [])
       .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter(Boolean)
   ];
+}
+
+function fileForStage(files, stage) {
   if (stage === "video") return files.find((file) => file.type.startsWith("video/"));
   return files.find((file) => file.type.startsWith("image/"));
+}
+
+async function imageFileFromSource(src) {
+  if (!src) return null;
+  const url = new URL(src, location.href);
+  if (!["data:", "http:", "https:"].includes(url.protocol)) return null;
+  const response = await fetch(url.href, { credentials: "include" });
+  if (!response.ok) throw new Error("无法读取剪贴板图片来源");
+  const blob = await response.blob();
+  if (!blob.type.startsWith("image/")) return null;
+  const extension = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+  return new File([blob], `pasted-image.${extension}`, { type: blob.type });
+}
+
+function imageSourceFromClipboard(event) {
+  const html = event.clipboardData?.getData("text/html") || "";
+  if (html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const src = doc.querySelector("img")?.getAttribute("src");
+    if (src) return src;
+  }
+  const text = (event.clipboardData?.getData("text/plain") || "").trim();
+  if (/^(data:image\/|https?:\/\/|\/)/i.test(text)) return text;
+  return "";
+}
+
+async function pastedFileForStage(event, stage) {
+  const files = [
+    ...clipboardFiles(event)
+  ];
+  const directFile = fileForStage(files, stage);
+  if (directFile) return directFile;
+  if (stage === "video") return null;
+  return imageFileFromSource(imageSourceFromClipboard(event));
+}
+
+async function handleDocumentPaste(event) {
+  if (event.defaultPrevented) return;
+  if (!project) return;
+  const target = event.target;
+  if (target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+
+  const product = target?.closest?.(".stage-product");
+  const shotId = product?.dataset.shotId || pasteUploadTarget?.shotId || lightboxShotId;
+  const stage = product?.dataset.stage || pasteUploadTarget?.stage || lightboxStageName;
+  if (!shotId || !generationStages.includes(stage)) return;
+
+  let file = null;
+  try {
+    file = await pastedFileForStage(event, stage);
+  } catch (error) {
+    showToast(error.message, "error");
+    return;
+  }
+  if (!file) {
+    showToast(stage === "video" ? "剪贴板里没有可上传的视频文件" : "剪贴板里没有可上传的图片", "error");
+    return;
+  }
+  event.preventDefault();
+  pasteUploadTarget = { shotId, stage };
+  await uploadStageFile(shotId, stage, file);
 }
 
 async function deleteStageMedia(shot, stage = "video", assetId = "") {
@@ -1856,7 +1940,7 @@ function stageInfo(shot, stage) {
       taskId: shot.materialTaskId || "",
       error: shot.materialError || "",
       label: "物料图",
-      action: "添加到队列"
+      action: "添加队列"
     };
   }
   if (stage === "storyboard") {
@@ -1865,7 +1949,7 @@ function stageInfo(shot, stage) {
       taskId: shot.storyboardTaskId || "",
       error: shot.storyboardError || "",
       label: "故事板",
-      action: "添加到队列"
+      action: "添加队列"
     };
   }
   return {
@@ -1873,7 +1957,7 @@ function stageInfo(shot, stage) {
     taskId: shot.videoTaskId || shot.generationTaskId || "",
     error: shot.videoError || shot.generationError || "",
     label: "视频",
-    action: "添加到队列"
+    action: "添加队列"
   };
 }
 
@@ -2207,6 +2291,7 @@ generateStoryboardsButton.addEventListener("click", async () => {
 
 mediaUpload.addEventListener("change", () => uploadMedia(mediaUpload.files?.[0]));
 assetUpload.addEventListener("change", () => uploadAsset(assetUpload.files?.[0]));
+document.addEventListener("paste", handleDocumentPaste);
 document.querySelector("#choose-asset-upload").addEventListener("click", () => chooseAssetUpload(""));
 document.querySelector("#choose-subject-upload").addEventListener("click", () => chooseAssetUpload("", "subject"));
 document.querySelector("#save-settings").addEventListener("click", saveSettingsFromDialog);
