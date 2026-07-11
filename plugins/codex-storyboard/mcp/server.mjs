@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
 const SERVER_NAME = "Codex Storyboard MCP";
-const SERVER_VERSION = "0.6.0";
+const SERVER_VERSION = "0.7.0";
 const DEFAULT_URL = "http://127.0.0.1:43218";
 const ASPECT_RATIOS = ["9:16", "16:9", "3:4", "4:3", "1:1"];
 
